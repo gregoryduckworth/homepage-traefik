@@ -1,7 +1,7 @@
 const http = require('node:http');
 const fs = require('node:fs/promises');
 const path = require('node:path');
-const { fetchRouters, normalizeRouters } = require('./traefik');
+const { fetchRouters, normalizeRouters, parseEntryPointPorts } = require('./traefik');
 const { checkAllRoutes, isCheckable } = require('./healthcheck');
 const { ConfigError, storedHealth, createConfigStore } = require('./config');
 const { createIconStore, parseSavedIcons } = require('./favicon');
@@ -28,6 +28,7 @@ const DUE_SLACK_MS = 2000;
 function createRouteStore({
   traefikUrl,
   fetchImpl,
+  entryPointPorts = new Map(),
   checkRoutes = checkAllRoutes,
   healthOptions = {},
   healthIntervalMs = 0,
@@ -42,7 +43,7 @@ function createRouteStore({
   async function refresh() {
     const before = JSON.stringify([state.routes, state.error]);
     try {
-      state.routes = normalizeRouters(await fetchRouters(traefikUrl, { fetchImpl }));
+      state.routes = normalizeRouters(await fetchRouters(traefikUrl, { fetchImpl }), { ports: entryPointPorts });
       state.updatedAt = new Date().toISOString();
       state.error = null;
     } catch (err) {
@@ -271,6 +272,8 @@ if (require.main === module) {
   const pollSeconds = readSeconds(process.env, 'POLL_INTERVAL_SECONDS', { fallback: 30, min: 5 });
   const healthSeconds = readSeconds(process.env, 'HEALTHCHECK_INTERVAL_SECONDS', { fallback: 60, min: 10 });
   const title = process.env.HOMEPAGE_TITLE || 'Routes';
+  const { ports: entryPointPorts, invalid: invalidPorts } = parseEntryPointPorts(process.env.ENTRYPOINT_PORTS);
+  if (invalidPorts.length) console.warn(`Ignoring ${invalidPorts.join(', ')} in ENTRYPOINT_PORTS: each entry should be <entry point>:<port>, such as websecure:8443`);
   const configFile = path.resolve(process.env.CONFIG_FILE || 'config/homepage.json');
   const timeoutSeconds = readSeconds(process.env, 'HEALTHCHECK_TIMEOUT_SECONDS', { fallback: 10, min: 1 });
   const healthOptions = {
@@ -293,7 +296,7 @@ if (require.main === module) {
   const events = createEvents();
 
   Promise.all([config.read(), loadIcons()]).then(([{ doc }, savedIcons]) => {
-    const store = createRouteStore({ traefikUrl, fetchImpl: fetch, healthOptions, healthIntervalMs: healthSeconds * 1000, health: storedHealth(doc) });
+    const store = createRouteStore({ traefikUrl, fetchImpl: fetch, entryPointPorts, healthOptions, healthIntervalMs: healthSeconds * 1000, health: storedHealth(doc) });
     // Icons are looked up even for routes with one set in the config file, so the page can fall back to the
     // site's own icon if that one doesn't load.
     const icons = createIconStore({ options: healthOptions, saved: savedIcons, onChange: events.notify });

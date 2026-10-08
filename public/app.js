@@ -119,7 +119,7 @@ function displayName(route) {
 }
 
 function addressOf(route) {
-  return route.url ? `${route.host}${route.path}` : null;
+  return route.url ? `${route.host}${route.port ? `:${route.port}` : ''}${route.path}` : null;
 }
 
 function byName(a, b) {

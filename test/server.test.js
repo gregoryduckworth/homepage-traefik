@@ -225,6 +225,15 @@ describe('server events', () => {
   });
 });
 
+describe('createRouteStore entry point ports', () => {
+  it('puts the configured port in route URLs', async () => {
+    const fetchImpl = async () => jsonResponse([{ name: 'app@docker', rule: 'Host(`app.test`)', entryPoints: ['websecure'], tls: {} }]);
+    const store = createRouteStore({ traefikUrl: 'http://traefik:8080', fetchImpl, entryPointPorts: new Map([['websecure', 8443]]) });
+    await store.refresh();
+    assert.equal(store.state.routes[0].url, 'https://app.test:8443');
+  });
+});
+
 describe('createRouteStore health checks', () => {
   const HOUR = 60 * 60 * 1000;
   let clock;
