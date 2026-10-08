@@ -10,6 +10,11 @@ describe('normalizeGroups', () => {
     assert.deepEqual(normalizeGroups([{ name: '  Media ' }]), [{ name: 'Media', routes: [] }]);
   });
 
+  it('keeps groups in the order they are listed', () => {
+    const groups = normalizeGroups([{ name: 'Tools' }, { name: 'Media' }, { name: 'Monitoring' }]);
+    assert.deepEqual(groups.map(group => group.name), ['Tools', 'Media', 'Monitoring']);
+  });
+
   it('keeps a route only in the first group that lists it', () => {
     const groups = normalizeGroups([
       { name: 'Media', routes: ['jellyfin@docker', 'sonarr@docker'] },
