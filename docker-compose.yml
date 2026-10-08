@@ -24,7 +24,7 @@ services:
       # *.localhost resolves to the homepage container itself, so send health checks straight to Traefik.
       HEALTHCHECK_ADDRESS: traefik
     volumes:
-      # Groups you create on the page are saved to this file, next to this compose file.
+      # Groups, names and icons you set on the page are saved to this file, next to this compose file.
       - ./homepage.json:/app/config/homepage.json
     depends_on:
       - traefik

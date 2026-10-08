@@ -65,6 +65,7 @@
       <span>Group</span>
       <select id="details-group"></select>
     </label>
+    <button type="button" class="button-quiet details-edit" id="details-edit">Change name or icon</button>
     <a class="details-open" id="details-open" target="_blank" rel="noopener noreferrer" hidden></a>
   </dialog>
 
@@ -77,6 +78,22 @@
       <div class="group-actions">
         <button type="button" class="button-quiet" id="group-cancel">Cancel</button>
         <button type="submit" class="button-primary" id="group-submit">Create group</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog class="details group-dialog" id="route-dialog" aria-labelledby="route-dialog-title">
+    <form id="route-form" novalidate>
+      <h2 id="route-dialog-title">Name and icon</h2>
+      <label for="route-name">Name</label>
+      <input id="route-name" maxlength="60" autocomplete="off">
+      <label for="route-icon">Icon address</label>
+      <input id="route-icon" type="url" maxlength="2048" autocomplete="off" spellcheck="false" aria-describedby="route-hint">
+      <p class="field-hint" id="route-hint">The address of an image. Leave a field empty to use the router name, or the icon found on the site.</p>
+      <p class="group-error" id="route-error" role="alert" hidden></p>
+      <div class="group-actions">
+        <button type="button" class="button-quiet" id="route-cancel">Cancel</button>
+        <button type="submit" class="button-primary" id="route-submit">Save</button>
       </div>
     </form>
   </dialog>

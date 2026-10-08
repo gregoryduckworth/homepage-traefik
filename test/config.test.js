@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const { normalizeGroups, storedHealth, createConfigStore } = require('../src/config');
+const { normalizeGroups, normalizeRouteSettings, storedHealth, createConfigStore } = require('../src/config');
 
 describe('normalizeGroups', () => {
   it('trims group names and defaults missing routes to an empty list', () => {
@@ -34,6 +34,35 @@ describe('normalizeGroups', () => {
   for (const [when, input, message] of invalid) {
     it(`rejects input when ${when}`, () => {
       assert.throws(() => normalizeGroups(input), { status: 400, message });
+    });
+  }
+});
+
+describe('normalizeRouteSettings', () => {
+  it('trims names and icons', () => {
+    const settings = normalizeRouteSettings({ 'a@docker': { name: ' Jellyfin ', icon: ' https://cdn.test/jellyfin.svg ' } });
+    assert.deepEqual(settings, { 'a@docker': { name: 'Jellyfin', icon: 'https://cdn.test/jellyfin.svg' } });
+  });
+
+  it('keeps only the fields that are set', () => {
+    assert.deepEqual(normalizeRouteSettings({ 'a@docker': { name: 'App', icon: '' } }), { 'a@docker': { name: 'App' } });
+  });
+
+  it('drops entries with neither a name nor an icon', () => {
+    assert.deepEqual(normalizeRouteSettings({ 'a@docker': { name: ' ' } }), {});
+  });
+
+  const invalid = [
+    ['routes is a list', [], /must be an object keyed by router name/],
+    ['an entry is not an object', { 'a@docker': 'App' }, /Settings for route "a@docker" must be an object/],
+    ['a name is not text', { 'a@docker': { name: 1 } }, /"name" for route "a@docker" must be text/],
+    ['a name is too long', { 'a@docker': { name: 'x'.repeat(61) } }, /at most 60 characters/],
+    ['an icon is not a web address', { 'a@docker': { icon: 'jellyfin.svg' } }, /icon for route "a@docker" must be the http:\/\/ or https:\/\/ address/],
+    ['an icon uses another scheme', { 'a@docker': { icon: 'javascript:alert(1)' } }, /must be the http:\/\/ or https:\/\/ address/],
+  ];
+  for (const [when, input, message] of invalid) {
+    it(`rejects input when ${when}`, () => {
+      assert.throws(() => normalizeRouteSettings(input), { status: 400, message });
     });
   }
 });
@@ -147,6 +176,44 @@ describe('createConfigStore', () => {
     assert.deepEqual(saved, { groups: [{ name: 'Media', routes: ['a@docker'] }], health });
     await store.saveGroups([{ name: 'Tools' }]);
     assert.deepEqual(JSON.parse(await fs.readFile(file, 'utf8')).health, health);
+  });
+
+  it('reads route names and icons from the file', async () => {
+    await fs.mkdir(path.dirname(file));
+    await fs.writeFile(file, JSON.stringify({ routes: { 'a@docker': { name: 'App' } } }));
+    const { routes } = await createConfigStore({ file }).read();
+    assert.deepEqual(routes, { 'a@docker': { name: 'App' } });
+  });
+
+  it('saves the name and icon of a route beside the groups without changing them', async () => {
+    const store = createConfigStore({ file });
+    await store.saveGroups([{ name: 'Media', routes: ['a@docker'] }]);
+    const saved = await store.saveRoute('a@docker', { name: 'App', icon: 'https://cdn.test/app.png' });
+    assert.deepEqual(saved, { name: 'App', icon: 'https://cdn.test/app.png' });
+    assert.deepEqual(JSON.parse(await fs.readFile(file, 'utf8')), {
+      groups: [{ name: 'Media', routes: ['a@docker'] }],
+      routes: { 'a@docker': { name: 'App', icon: 'https://cdn.test/app.png' } },
+    });
+  });
+
+  it('keeps route names and icons when groups are saved', async () => {
+    const store = createConfigStore({ file });
+    await store.saveRoute('a@docker', { name: 'App' });
+    await store.saveGroups([{ name: 'Media' }]);
+    assert.deepEqual((await store.read()).routes, { 'a@docker': { name: 'App' } });
+  });
+
+  it('removes the entry for a route when its name and icon are cleared', async () => {
+    const store = createConfigStore({ file });
+    await store.saveRoute('a@docker', { name: 'App' });
+    assert.equal(await store.saveRoute('a@docker', { name: '', icon: '' }), null);
+    assert.deepEqual(JSON.parse(await fs.readFile(file, 'utf8')), {});
+  });
+
+  it('refuses to save route settings over a file that does not parse', async () => {
+    await fs.mkdir(path.dirname(file));
+    await fs.writeFile(file, 'not json');
+    await assert.rejects(createConfigStore({ file }).saveRoute('a@docker', { name: 'App' }), { status: 409 });
   });
 
   it('does not save health results over a file that does not parse', async () => {

@@ -326,7 +326,7 @@ main {
   border-radius: 5px 0 0 5px;
 }
 
-a.tile-link:hover .tile-host { color: var(--accent); }
+a.tile-link:hover .tile-name { color: var(--accent); }
 
 .tile-info {
   flex: none;
@@ -352,12 +352,44 @@ a.tile-link:hover .tile-host { color: var(--accent); }
   background: var(--off);
 }
 
+/* The route's icon, with its status dot on the bottom right corner. */
+.tile-icon {
+  position: relative;
+  flex: none;
+  width: 2rem;
+  height: 2rem;
+}
+
+.tile-icon img,
+.tile-letter {
+  width: 100%;
+  height: 100%;
+  border-radius: 6px;
+}
+
+.tile-icon img { object-fit: contain; }
+
+.tile-letter {
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  color: var(--muted);
+  background: var(--bg);
+}
+
+.tile-icon .dot {
+  position: absolute;
+  right: -0.1875rem;
+  bottom: -0.1875rem;
+  box-shadow: 0 0 0 2px var(--surface);
+}
+
 .tile-main {
   flex: 1;
   min-width: 0;
 }
 
-.tile-host,
+.tile-name,
 .tile-sub {
   display: block;
   overflow: hidden;
@@ -365,8 +397,7 @@ a.tile-link:hover .tile-host { color: var(--accent); }
   white-space: nowrap;
 }
 
-.tile-host { font-weight: 700; }
-.tile-host .path { font-weight: 400; color: var(--muted); }
+.tile-name { font-weight: 700; }
 .tile-sub { font-size: 0.8125rem; color: var(--muted); }
 
 .tile-state {
@@ -385,7 +416,7 @@ a.tile-link:hover .tile-host { color: var(--accent); }
 [data-kind="warn"] .tile-state { color: var(--warn-text); font-weight: 700; }
 .tile[data-kind="down"] { border-color: var(--down); }
 
-.tile[data-disabled] .tile-host { color: var(--muted); text-decoration: line-through; }
+.tile[data-disabled] .tile-name { color: var(--muted); text-decoration: line-through; }
 .dot[data-checking] { animation: pulse 1.4s ease-in-out infinite; }
 
 /* Details dialog */
@@ -489,6 +520,12 @@ a.tile-link:hover .tile-host { color: var(--accent); }
   color: var(--muted);
 }
 
+.details-edit {
+  display: block;
+  width: calc(100% - 2.5rem);
+  margin: 0 1.25rem 0.75rem;
+}
+
 .details-group select,
 .group-dialog input {
   flex: 1;
@@ -512,6 +549,7 @@ a.tile-link:hover .tile-host { color: var(--accent); }
 .group-dialog h2 { margin: 0 0 0.5rem; font-size: 1.125rem; }
 .group-dialog label { color: var(--muted); }
 .group-error { margin: 0; color: var(--down-text); }
+.field-hint { margin: 0; font-size: 0.8125rem; color: var(--muted); }
 
 .group-actions {
   display: flex;

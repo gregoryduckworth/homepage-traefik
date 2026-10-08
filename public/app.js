@@ -37,6 +37,12 @@ const els = {
   groupError: $('group-error'),
   groupSubmit: $('group-submit'),
   ungroupZone: $('ungroup-zone'),
+  routeDialog: $('route-dialog'),
+  routeForm: $('route-form'),
+  routeName: $('route-name'),
+  routeIcon: $('route-icon'),
+  routeError: $('route-error'),
+  routeSubmit: $('route-submit'),
 };
 
 const INFO_ICON = '<svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/></svg>';
@@ -58,6 +64,7 @@ function closeOnBackdrop(dialog) {
 }
 closeOnBackdrop(els.details);
 closeOnBackdrop(els.groupDialog);
+closeOnBackdrop(els.routeDialog);
 
 let data = { routes: [], groups: [], error: null, configError: null, updatedAt: null };
 let saveError = null;
@@ -85,7 +92,7 @@ function groupKey(route) {
 
 function matches(route, query) {
   if (!query) return true;
-  return [route.host, route.path, route.service, route.name, route.rule]
+  return [route.custom?.name, route.host, route.path, route.service, route.name, route.rule]
     .some(value => value && value.toLowerCase().includes(query));
 }
 
@@ -105,8 +112,43 @@ function statusOf(route) {
   return { kind: 'up', label: 'Up' };
 }
 
+// A name set on the page wins over the router name, which reads better than the hostname.
 function displayName(route) {
-  return route.url ? `${route.host}${route.path}` : route.name;
+  return route.custom?.name || route.name;
+}
+
+function addressOf(route) {
+  return route.url ? `${route.host}${route.path}` : null;
+}
+
+function byName(a, b) {
+  return displayName(a).localeCompare(displayName(b), undefined, { sensitivity: 'base', numeric: true });
+}
+
+// An icon set on the page, else the one the server found on the site, else the name's first letter; an image that
+// doesn't load falls through to the next. The status dot sits on its corner.
+function renderIcon(route, dot) {
+  const box = el('span', 'tile-icon');
+  const letter = el('span', 'tile-letter', [...displayName(route)][0]?.toUpperCase() || '?');
+  letter.setAttribute('aria-hidden', 'true');
+  const sources = [route.custom?.icon, route.icon].filter(Boolean);
+  if (sources.length) {
+    const img = el('img');
+    img.alt = '';
+    img.draggable = false;
+    img.referrerPolicy = 'no-referrer';
+    img.addEventListener('error', () => {
+      sources.shift();
+      if (sources.length) img.src = sources[0];
+      else img.replaceWith(letter);
+    });
+    img.src = sources[0];
+    box.append(img);
+  } else {
+    box.append(letter);
+  }
+  box.append(dot);
+  return box;
 }
 
 function renderTile(route) {
@@ -126,10 +168,8 @@ function renderTile(route) {
   const dot = el('span', 'dot');
   if (status.kind === 'checking') dot.dataset.checking = '';
 
-  const host = el('span', 'tile-host', route.url ? route.host : route.name);
-  if (route.url && route.path) host.append(el('span', 'path', route.path));
   const main = el('span', 'tile-main');
-  main.append(host, el('span', 'tile-sub', route.url ? route.service || route.name : route.rule));
+  main.append(el('span', 'tile-name', displayName(route)), el('span', 'tile-sub', addressOf(route) || route.rule));
 
   const state = el('span', 'tile-state');
   if (status.kind === 'up') {
@@ -138,7 +178,7 @@ function renderTile(route) {
     state.textContent = status.label;
   }
 
-  link.append(dot, main, state);
+  link.append(renderIcon(route, dot), main, state);
 
   const info = el('button', 'tile-info');
   info.type = 'button';
@@ -180,9 +220,10 @@ function detailRows(route) {
     ['Status', status.kind === 'checking' ? 'Checking' : status.label],
     ['Health check', healthText(route)],
     ['Checked with', attemptText(route.health)],
-    ['Address', route.health?.address],
+    ['Checked address', route.health?.address],
     ['Last checked', route.health?.checkedAt && timeOf(route.health.checkedAt)],
     ['Traefik status', route.status],
+    ['Address', addressOf(route)],
     ['Router', route.id],
     ['Rule', route.rule, 'code'],
     ['Service', route.service],
@@ -217,7 +258,7 @@ function fillDetails(route) {
   open.hidden = !route.url;
   if (route.url) {
     open.href = route.url;
-    open.textContent = `Open ${displayName(route)}`;
+    open.textContent = `Open ${addressOf(route)}`;
   }
 }
 
@@ -239,7 +280,7 @@ function refreshDetails() {
 }
 
 function renderStrip() {
-  const segments = data.routes.map(route => {
+  const segments = [...data.routes].sort(byName).map(route => {
     const status = statusOf(route);
     const segment = el('span');
     segment.dataset.kind = status.kind;
@@ -334,7 +375,7 @@ function render() {
   }
   renderPending = false;
   const query = els.filter.value.trim().toLowerCase();
-  const visible = data.routes.filter(route => matches(route, query));
+  const visible = data.routes.filter(route => matches(route, query)).sort(byName);
   const byId = new Map(visible.map(route => [route.id, route]));
   const assigned = new Set(data.groups.flatMap(group => group.routes));
 
@@ -492,6 +533,49 @@ els.groupForm.addEventListener('submit', event => {
 });
 
 els.newGroup.addEventListener('click', () => openGroupDialog());
+
+// Names and icons are saved one route at a time, and the dialog stays open until the server has the change.
+let editingRoute = null;
+
+function openRouteDialog() {
+  const route = data.routes.find(r => r.id === detailsId);
+  if (!route) return;
+  editingRoute = route.id;
+  els.routeName.value = route.custom?.name || '';
+  els.routeName.placeholder = route.name;
+  els.routeIcon.value = route.custom?.icon || '';
+  els.routeIcon.placeholder = route.icon ? 'The site’s own icon' : 'https://…';
+  els.routeError.hidden = true;
+  els.routeSubmit.disabled = false;
+  els.routeDialog.showModal();
+}
+
+els.routeForm.addEventListener('submit', async event => {
+  event.preventDefault();
+  const id = editingRoute;
+  els.routeSubmit.disabled = true;
+  try {
+    const res = await fetch(`api/routes/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: els.routeName.value, icon: els.routeIcon.value }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || `The homepage server responded with HTTP ${res.status}`);
+    const route = data.routes.find(r => r.id === id);
+    if (route) route.custom = body.custom;
+    els.routeDialog.close();
+    render();
+    load();
+  } catch (err) {
+    els.routeError.textContent = err.message;
+    els.routeError.hidden = false;
+    els.routeSubmit.disabled = false;
+  }
+});
+
+$('details-edit').addEventListener('click', openRouteDialog);
+$('route-cancel').addEventListener('click', () => els.routeDialog.close());
 $('group-cancel').addEventListener('click', () => els.groupDialog.close());
 els.detailsGroup.addEventListener('change', () => moveRoute(detailsId, els.detailsGroup.value || null));
 
@@ -606,12 +690,19 @@ for (const zone of [els.routes, els.ungroupZone]) {
   });
 }
 
+// Loads can overlap, say a poll and the reload after saving a route, so only the newest response is used.
+let loadsStarted = 0;
+let loadApplied = 0;
+
 async function load() {
   const edits = groupEdits;
+  const seq = ++loadsStarted;
   try {
     const res = await fetch('api/routes', { cache: 'no-store' });
     if (!res.ok) throw new Error(`The homepage server responded with HTTP ${res.status}`);
     const body = await res.json();
+    if (seq < loadApplied) return;
+    loadApplied = seq;
     // Keep this page's groups if it changed them while the request was out: the response may predate the change.
     const stale = saving || edits !== groupEdits;
     if (!stale) confirmedGroups = body.groups || [];
