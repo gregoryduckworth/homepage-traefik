@@ -74,6 +74,8 @@ services:
 - When an HTTP router and an HTTPS router serve the same host and path (the usual redirect setup), only the HTTPS one is listed.
 - Routers without a `Host` rule (for example `HostRegexp` or path-only rules) are listed without a link.
 - Disabled routers, and routers that have warnings, are marked as such.
+- Each route with a link gets a live status. After every poll the server sends a `HEAD` request to the route's URL: any HTTP response below 500 shows as **Up** (with its response time), a 5xx shows the status code, and no response within 5 seconds shows as **Down**. The checks run from the homepage container, so its DNS must resolve your route hostnames (for example, `*.localhost` hosts resolve to the container itself and will show as Down).
+- The page has light and dark themes. It follows your system setting until you pick one with the toggle.
 - If Traefik can't be reached, the page keeps showing the last routes it loaded and explains what went wrong.
 
 The server also exposes `GET /api/routes` (the normalized route list as JSON) and `GET /healthz`.
