@@ -452,6 +452,10 @@ a.tile-link:hover .tile-name { color: var(--accent); }
 .tile[data-kind="down"] { border-color: var(--down); }
 
 .tile[data-disabled] .tile-name { color: var(--muted); text-decoration: line-through; }
+/* Shown only on request, so they read as set aside rather than broken. */
+.tile[data-hidden] { border-style: dashed; border-color: var(--hairline); }
+.tile[data-hidden] .tile-name { color: var(--muted); }
+.tile[data-hidden] .tile-icon img { opacity: 0.6; }
 .dot[data-checking] { animation: pulse 1.4s ease-in-out infinite; }
 
 /* Details dialog */
@@ -610,6 +614,9 @@ a.tile-link:hover .tile-name { color: var(--accent); }
   max-width: 34rem;
   color: var(--muted);
 }
+
+.hidden-toggle { display: block; margin: 1.5rem 0; }
+.hidden-toggle[hidden] { display: none; }
 
 @keyframes pulse {
   50% { opacity: 0.3; }
