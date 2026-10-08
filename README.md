@@ -12,6 +12,31 @@ docker compose up -d
 
 Then open <http://home.localhost>. The example `docker-compose.yml` starts Traefik, this homepage, and a `whoami` demo service, so you should see both `home.localhost` and `whoami.localhost` listed.
 
+## Using the pre-built Docker image
+
+A pre-built image is published to GitHub Container Registry on every push to `main`. You can pull it directly instead of building from source:
+
+```sh
+docker pull ghcr.io/gregoryduckworth/homepage-traefik:main
+```
+
+Tagged releases are also available (e.g. `ghcr.io/gregoryduckworth/homepage-traefik:1.0.0`).
+
+To use the pre-built image in a Docker Compose file, replace the `build` directive with `image`:
+
+```yaml
+services:
+  homepage:
+    image: ghcr.io/gregoryduckworth/homepage-traefik:main
+    environment:
+      TRAEFIK_API_URL: http://traefik:8080
+      HOMEPAGE_TITLE: Home lab
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.homepage.rule=Host(`home.example.com`)
+      - traefik.http.services.homepage.loadbalancer.server.port=3000
+```
+
 ## Adding it to an existing Traefik setup
 
 The homepage needs network access to the Traefik API. Enable the API in Traefik with either of these:
@@ -24,7 +49,7 @@ Then add the homepage to the same Docker network as Traefik:
 ```yaml
 services:
   homepage:
-    build: https://github.com/gregoryduckworth/homepage-traefik.git
+    image: ghcr.io/gregoryduckworth/homepage-traefik:main
     environment:
       TRAEFIK_API_URL: http://traefik:8080
     labels:
