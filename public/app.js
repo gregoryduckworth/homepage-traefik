@@ -110,6 +110,8 @@ function statusOf(route) {
   if (!route.health) return { kind: 'checking', label: 'Checking' };
   if (!route.health.reachable) return { kind: 'down', label: failureLabel(route.health) };
   if (route.health.statusCode >= 500) return { kind: 'down', label: `HTTP ${route.health.statusCode}` };
+  // Traefik's own 404: the check didn't reach the route, though the route may still work in a browser.
+  if (route.health.unrouted) return { kind: 'warn', label: 'No router' };
   return { kind: 'up', label: 'Up' };
 }
 
@@ -207,6 +209,7 @@ function healthText(route) {
   if (!route.url) return 'Not checked: the rule has no Host to request';
   if (!health) return 'Waiting for the first check';
   if (!health.reachable) return `${health.detail || 'The request failed.'} (${health.error})`;
+  if (health.unrouted) return health.detail;
   return `HTTP ${health.statusCode} in ${health.latencyMs} ms`;
 }
 
@@ -285,7 +288,7 @@ function renderStrip() {
     const status = statusOf(route);
     const segment = el('span');
     segment.dataset.kind = status.kind;
-    const reason = status.kind === 'down' && route.health?.detail;
+    const reason = (status.kind === 'down' || route.health?.unrouted) && route.health?.detail;
     segment.title = `${displayName(route)}: ${reason || status.label}`;
     return segment;
   });

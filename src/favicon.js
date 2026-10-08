@@ -170,7 +170,7 @@ async function findIcon(pageUrl, { timeoutMs = DEFAULT_TIMEOUT_MS, address, look
 }
 
 function isReachable(route) {
-  return isCheckable(route) && route.health?.reachable && route.health.statusCode < 500;
+  return isCheckable(route) && route.health?.reachable && route.health.statusCode < 500 && !route.health.unrouted;
 }
 
 // Icons saved by `serialize`, keyed by route id. The saved file is only a cache, so entries that aren't an image
