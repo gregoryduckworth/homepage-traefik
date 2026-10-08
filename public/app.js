@@ -44,6 +44,8 @@ const els = {
   routeIcon: $('route-icon'),
   routeError: $('route-error'),
   routeSubmit: $('route-submit'),
+  detailsHide: $('details-hide'),
+  hiddenToggle: $('hidden-toggle'),
 };
 
 const INFO_ICON = '<svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/></svg>';
@@ -79,6 +81,9 @@ let confirmedGroups = [];
 let dragId = null;
 let dragGroup = null;
 let renderPending = false;
+// Hidden routes are left off the page, the strip and the summary until someone chooses to show them.
+let showHidden = false;
+let hideError = null;
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -116,6 +121,15 @@ function statusOf(route) {
 // A name set on the page wins over the router name, which reads better than the hostname.
 function displayName(route) {
   return route.custom?.name || route.name;
+}
+
+function isHidden(route) {
+  return Boolean(route.custom?.hidden);
+}
+
+// The routes the strip and the summary count: every route that isn't hidden.
+function watchedRoutes() {
+  return data.routes.filter(route => !isHidden(route));
 }
 
 function addressOf(route) {
@@ -156,6 +170,7 @@ function renderTile(route) {
   const status = statusOf(route);
   const tile = el('div', 'tile');
   tile.dataset.kind = status.kind;
+  if (isHidden(route)) tile.dataset.hidden = '';
   if (route.status === 'disabled') tile.dataset.disabled = '';
 
   const link = el(route.url ? 'a' : 'span', 'tile-link');
@@ -170,7 +185,9 @@ function renderTile(route) {
   if (status.kind === 'checking') dot.dataset.checking = '';
 
   const main = el('span', 'tile-main');
-  main.append(el('span', 'tile-name', displayName(route)), el('span', 'tile-sub', addressOf(route) || route.rule));
+  const name = el('span', 'tile-name', displayName(route));
+  if (isHidden(route)) name.append(el('span', 'visually-hidden', ' (hidden)'));
+  main.append(name, el('span', 'tile-sub', addressOf(route) || route.rule));
 
   const state = el('span', 'tile-state');
   if (status.kind === 'up') {
@@ -255,6 +272,8 @@ function fillDetails(route) {
   els.detailsGroup.value = current ? current.name : '';
   els.detailsGroup.parentElement.hidden = !data.groups.length;
 
+  els.detailsHide.textContent = isHidden(route) ? 'Show route' : 'Hide route';
+
   const open = $('details-open');
   open.hidden = !route.url;
   if (route.url) {
@@ -281,7 +300,7 @@ function refreshDetails() {
 }
 
 function renderStrip() {
-  const segments = [...data.routes].sort(byName).map(route => {
+  const segments = watchedRoutes().sort(byName).map(route => {
     const status = statusOf(route);
     const segment = el('span');
     segment.dataset.kind = status.kind;
@@ -294,12 +313,15 @@ function renderStrip() {
 }
 
 function summaryText() {
-  const count = data.routes.length;
-  const kinds = data.routes.map(route => statusOf(route).kind);
+  const watched = watchedRoutes();
+  const count = watched.length;
+  const hidden = data.routes.length - count;
+  const kinds = watched.map(route => statusOf(route).kind);
   const up = kinds.filter(kind => kind === 'up').length;
   const problems = kinds.filter(kind => kind === 'down' || kind === 'warn').length;
   const parts = [`${up} of ${count} ${count === 1 ? 'route' : 'routes'} up`];
   if (problems) parts.push(`${problems} ${problems === 1 ? 'needs' : 'need'} attention`);
+  if (hidden) parts.push(`${hidden} hidden`);
   return parts.join(', ');
 }
 
@@ -319,7 +341,8 @@ function iconButton(icon, label, onClick) {
 
 // Custom groups get buttons to move, rename and delete them, and can be dragged by their heading; entry point
 // groups are where ungrouped routes land.
-function renderSection(title, routes, group) {
+// `hiddenCount` is how many of a custom group's routes are hidden and not shown.
+function renderSection(title, routes, group, hiddenCount = 0) {
   const section = el('section', 'group');
   const head = el('div', 'group-head');
   const heading = el('h2', null, `${title} `);
@@ -347,7 +370,9 @@ function renderSection(title, routes, group) {
     );
   }
   if (group && !routes.length) {
-    section.append(el('p', 'group-empty', 'Drag routes here, or choose this group in a route’s details.'));
+    section.append(el('p', 'group-empty', hiddenCount
+      ? `Every route in this group is hidden. Select “Show ${hiddenCount} hidden ${hiddenCount === 1 ? 'route' : 'routes'}” to see ${hiddenCount === 1 ? 'it' : 'them'}.`
+      : 'Drag routes here, or choose this group in a route’s details.'));
   } else {
     const list = el('ul', 'tiles');
     list.append(...routes.map(renderTile));
@@ -361,6 +386,7 @@ function renderNotice() {
   if (data.error) notices.push([data.routes.length ? 'Showing the last routes we could load' : 'No routes loaded', data.error]);
   if (data.configError) notices.push(['Groups couldn’t be loaded from the config file', data.configError]);
   if (saveError) notices.push(['Your group change wasn’t saved', saveError]);
+  if (hideError) notices.push(['The route wasn’t hidden or shown', hideError]);
   els.notice.replaceChildren(...notices.map(([heading, text]) => {
     const item = el('p');
     item.append(el('strong', null, heading), text);
@@ -376,13 +402,20 @@ function render() {
   }
   renderPending = false;
   const query = els.filter.value.trim().toLowerCase();
-  const visible = data.routes.filter(route => matches(route, query)).sort(byName);
+  const hiddenCount = data.routes.filter(isHidden).length;
+  // Once nothing is hidden, the next route hidden should leave the page rather than stay on it dimmed.
+  if (!hiddenCount) showHidden = false;
+  const visible = data.routes.filter(route => (showHidden || !isHidden(route)) && matches(route, query)).sort(byName);
   const byId = new Map(visible.map(route => [route.id, route]));
   const assigned = new Set(data.groups.flatMap(group => group.routes));
 
   // Configured routes that Traefik isn't serving right now stay in the file and reappear when they come back.
   const custom = data.groups
-    .map(group => ({ group, routes: group.routes.map(id => byId.get(id)).filter(Boolean) }))
+    .map(group => ({
+      group,
+      routes: group.routes.map(id => byId.get(id)).filter(Boolean),
+      hidden: showHidden ? 0 : data.routes.filter(route => isHidden(route) && group.routes.includes(route.id)).length,
+    }))
     .filter(({ routes }) => routes.length || !query);
 
   const groups = new Map();
@@ -397,7 +430,7 @@ function render() {
   // Rebuilding the list drops focus, so put it back on the button with the same label.
   const focused = els.routes.contains(document.activeElement) ? document.activeElement.getAttribute('aria-label') : null;
   els.routes.replaceChildren(
-    ...custom.map(({ group, routes }) => renderSection(group.name, routes, group)),
+    ...custom.map(({ group, routes, hidden }) => renderSection(group.name, routes, group, hidden)),
     ...keys.map(key => renderSection(key, groups.get(key))),
   );
   if (focused) [...els.routes.querySelectorAll('[aria-label]')].find(node => node.getAttribute('aria-label') === focused)?.focus();
@@ -419,9 +452,17 @@ function render() {
     els.summary.textContent = 'Waiting for Traefik';
   }
 
+  els.hiddenToggle.hidden = !hiddenCount;
+  els.hiddenToggle.textContent = showHidden
+    ? 'Stop showing hidden routes'
+    : `Show ${hiddenCount} hidden ${hiddenCount === 1 ? 'route' : 'routes'}`;
+
   els.empty.hidden = true;
   if (data.updatedAt && !count) {
     els.empty.textContent = 'Traefik has no routes yet. Add a router with a Host rule, for example a traefik.http.routers.<name>.rule label on a container, and it will show up here.';
+    els.empty.hidden = false;
+  } else if (count && !visible.length && !query) {
+    els.empty.textContent = 'Every route is hidden. Select “Show hidden routes” below to see them.';
     els.empty.hidden = false;
   } else if (count && !visible.length) {
     els.empty.textContent = `Nothing matches “${els.filter.value.trim()}”. Clear the search to see every route.`;
@@ -576,6 +617,33 @@ els.routeForm.addEventListener('submit', async event => {
 });
 
 $('details-edit').addEventListener('click', openRouteDialog);
+
+// Only "hidden" is sent, so the route keeps its name and icon. A route that's hidden while hidden routes aren't
+// shown leaves the page, so its details close too.
+els.detailsHide.addEventListener('click', async () => {
+  const id = detailsId;
+  const route = data.routes.find(r => r.id === id);
+  if (!route) return;
+  const hidden = !isHidden(route);
+  els.detailsHide.disabled = true;
+  try {
+    const body = await putJson(`api/routes/${encodeURIComponent(id)}`, { hidden });
+    route.custom = body.custom;
+    hideError = null;
+    if (hidden && !showHidden) els.details.close();
+  } catch (err) {
+    hideError = err.message;
+  } finally {
+    els.detailsHide.disabled = false;
+  }
+  render();
+  load();
+});
+
+els.hiddenToggle.addEventListener('click', () => {
+  showHidden = !showHidden;
+  render();
+});
 $('route-cancel').addEventListener('click', () => els.routeDialog.close());
 $('group-cancel').addEventListener('click', () => els.groupDialog.close());
 els.detailsGroup.addEventListener('change', () => moveRoute(detailsId, els.detailsGroup.value || null));

@@ -39,10 +39,10 @@ function normalizeGroups(input) {
   });
 }
 
-// A route's own name and icon, both optional. Returns null when neither is set, so the entry can be dropped.
-// `label` names the route mid-sentence in error messages.
+// A route's own name and icon, and whether it's hidden, all optional. Returns null when none is set, so the entry
+// can be dropped. `label` names the route mid-sentence in error messages.
 function normalizeRouteSetting(input, label = 'the route') {
-  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new ConfigError(`Settings for ${label} must be an object with "name" and "icon"`);
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new ConfigError(`Settings for ${label} must be an object with "name", "icon" and "hidden"`);
   const field = key => {
     const value = input[key] ?? '';
     if (typeof value !== 'string') throw new ConfigError(`"${key}" for ${label} must be text`);
@@ -54,8 +54,10 @@ function normalizeRouteSetting(input, label = 'the route') {
   if (icon && (!/^https?:\/\/./i.test(icon) || !URL.canParse(icon) || icon.length > MAX_ICON_LENGTH)) {
     throw new ConfigError(`The icon for ${label} must be the http:// or https:// address of an image`);
   }
-  if (!name && !icon) return null;
-  return { ...(name && { name }), ...(icon && { icon }) };
+  const hidden = input.hidden ?? false;
+  if (typeof hidden !== 'boolean') throw new ConfigError(`"hidden" for ${label} must be true or false`);
+  if (!name && !icon && !hidden) return null;
+  return { ...(name && { name }), ...(icon && { icon }), ...(hidden && { hidden }) };
 }
 
 // Keyed by Traefik router name. Entries for routers Traefik isn't serving are kept, like group members.
@@ -156,12 +158,14 @@ function createConfigStore({ file }) {
     });
   }
 
-  // Sets or clears one route's name and icon. Returns the saved setting, or null when both were cleared.
+  // Sets or clears one route's name, icon and whether it's hidden. A field left out of `input` keeps its saved value,
+  // so hiding a route doesn't need its name and icon. Returns the saved setting, or null when all were cleared.
   async function saveRoute(id, input) {
     if (typeof id !== 'string' || !id) throw new ConfigError('Give the router name of the route to change');
-    const setting = normalizeRouteSetting(input);
+    normalizeRouteSetting(input);
     return queue(async () => {
       const current = await readForChange('routes');
+      const setting = normalizeRouteSetting({ ...current.routes[id], ...input });
       // fromEntries defines own keys, so even a router named __proto__ is stored as a plain entry.
       const others = Object.entries(current.routes).filter(([key]) => key !== id);
       const routes = Object.fromEntries(setting ? [...others, [id, setting]] : others);

@@ -1,6 +1,6 @@
 # homepage-traefik
 
-A small homepage that lists every route Traefik is serving. It reads routers from the Traefik API (`/api/http/routers`), turns each `Host(...)` rule into a link named after its router, with the site's own icon, and groups the links by entrypoint. When you add a container with Traefik labels, it shows up on the page within one poll interval. There is nothing to configure per service, though you can rename routes, give them your own icons (see [Names and icons](#names-and-icons)) and drag them into your own groups (see [Groups](#groups)).
+A small homepage that lists every route Traefik is serving. It reads routers from the Traefik API (`/api/http/routers`), turns each `Host(...)` rule into a link named after its router, with the site's own icon, and groups the links by entrypoint. When you add a container with Traefik labels, it shows up on the page within one poll interval. There is nothing to configure per service, though you can rename routes, give them your own icons, hide the ones you don't need (see [Names, icons and hiding routes](#names-icons-and-hiding-routes)) and drag them into your own groups (see [Groups](#groups)).
 
 The app is a single Node.js process with no runtime dependencies.
 
@@ -80,7 +80,7 @@ services:
 ## What gets shown
 
 - Traefik's own `@internal` routers (API, dashboard) are hidden.
-- Each route is named after its Traefik router, without the `@provider` suffix (`jellyfin@docker` shows as **jellyfin**), with its address underneath. Routes in the entrypoint groups are listed by name. You can change the name and icon (see [Names and icons](#names-and-icons)).
+- Each route is named after its Traefik router, without the `@provider` suffix (`jellyfin@docker` shows as **jellyfin**), with its address underneath. Routes in the entrypoint groups are listed by name. You can change the name and icon (see [Names, icons and hiding routes](#names-icons-and-hiding-routes)).
 - A router's link is the first `Host` in its rule, plus any `Path`/`PathPrefix`. Routers with TLS link to `https://`. Links leave out the port, so they go to 80 or 443. If an entry point is published on another port, list it in `ENTRYPOINT_PORTS` as `<entry point>:<port>`, separated by commas, for example `websecure:8443`. A router on that entry point then links to `https://app.example.com:8443`. Its health checks and icon lookups use the same port. A router on several entry points uses the port of the first one listed.
 - When an HTTP router and an HTTPS router serve the same host and path (the usual redirect setup), only the HTTPS one is listed.
 - Routers without a `Host` rule (for example `HostRegexp` or path-only rules) are listed without a link.
@@ -96,7 +96,7 @@ services:
 - The page has light and dark themes. It follows your system setting until you pick one with the toggle.
 - If Traefik can't be reached, the page keeps showing the last routes it loaded and explains what went wrong.
 
-## Names and icons
+## Names, icons and hiding routes
 
 Each route shows an icon beside its name. Once a route's health check succeeds, the server fetches its page and looks for an icon the way a browser does: an SVG icon, then an `apple-touch-icon`, then any other `<link rel="icon">` (largest first), then `/favicon.ico`. Icons are fetched from the homepage container, the same way as health checks, so `HEALTHCHECK_ADDRESS` applies to them too. They're looked up again after a day, or after an hour if none was found, and served to the page from `/api/icons/`. A new or changed icon shows up on open pages straight away, without a reload.
 
@@ -108,13 +108,16 @@ The icons found are saved, base64-encoded, in `icons.json` beside `CONFIG_FILE`,
 
 To change a route's name or icon, open its details panel and select **Change name or icon**. The icon is the `http://` or `https://` address of an image, for example one from [Dashboard Icons](https://github.com/homarr-labs/dashboard-icons) such as `https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/svg/jellyfin.svg`. Your browser loads it directly, so it must be reachable from wherever you open the homepage; if it doesn't load, the page shows the route's own icon instead. Leave a field empty to go back to the router name or the icon found on the site.
 
+To hide a route you don't need on the page, such as the homepage's own route, open its details panel and select **Hide route**. Hidden routes are left off the page, the status strip and the count of routes that are up. When any route is hidden, a **Show hidden routes** button appears below the groups. It shows them with a dashed outline until you select it again, and from their details panel you can select **Show route** to bring one back. Hidden routes are still checked, so their status is up to date when you show them.
+
 These are saved in the same file as your groups (see below), under `routes`, keyed by router name:
 
 ```json
 {
   "routes": {
     "jellyfin@docker": { "name": "Jellyfin", "icon": "https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/svg/jellyfin.svg" },
-    "grafana@docker": { "name": "Dashboards" }
+    "grafana@docker": { "name": "Dashboards" },
+    "homepage@docker": { "hidden": true }
   }
 }
 ```
@@ -166,7 +169,7 @@ Mounting `homepage.json` on its own (`./homepage.json:/app/config/homepage.json`
 
 ## API
 
-The server also exposes `GET /api/routes` (the normalized route list, your groups and any config file error as JSON; each route has its saved name and icon under `custom` and the path of its found icon under `icon`), `PUT /api/groups` (replaces the groups; send `{"groups": [...]}` as `application/json`), `PUT /api/routes/<router name>` (sets a route's name and icon; send `{"name": "...", "icon": "..."}`, with empty values to clear them), `GET /api/icons/<router name>`, `GET /api/events` (a server-sent event stream that sends a message when routes, health checks, icons or saved settings change) and `GET /healthz`.
+The server also exposes `GET /api/routes` (the normalized route list, your groups and any config file error as JSON; each route has its saved name and icon under `custom` and the path of its found icon under `icon`), `PUT /api/groups` (replaces the groups; send `{"groups": [...]}` as `application/json`), `PUT /api/routes/<router name>` (sets a route's name, icon and whether it's hidden; send any of `{"name": "...", "icon": "...", "hidden": true}`, with empty values or `false` to clear them; fields you leave out keep their saved values), `GET /api/icons/<router name>`, `GET /api/events` (a server-sent event stream that sends a message when routes, health checks, icons or saved settings change) and `GET /healthz`.
 
 ## Development
 

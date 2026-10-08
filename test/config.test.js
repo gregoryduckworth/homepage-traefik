@@ -48,6 +48,13 @@ describe('normalizeRouteSettings', () => {
     assert.deepEqual(normalizeRouteSettings({ 'a@docker': { name: 'App', icon: '' } }), { 'a@docker': { name: 'App' } });
   });
 
+  it('keeps a hidden flag, but only when it is true', () => {
+    assert.deepEqual(normalizeRouteSettings({ 'a@docker': { hidden: true }, 'b@docker': { name: 'B', hidden: false } }), {
+      'a@docker': { hidden: true },
+      'b@docker': { name: 'B' },
+    });
+  });
+
   it('drops entries with neither a name nor an icon', () => {
     assert.deepEqual(normalizeRouteSettings({ 'a@docker': { name: ' ' } }), {});
   });
@@ -58,6 +65,7 @@ describe('normalizeRouteSettings', () => {
     ['a name is not text', { 'a@docker': { name: 1 } }, /"name" for route "a@docker" must be text/],
     ['a name is too long', { 'a@docker': { name: 'x'.repeat(61) } }, /at most 60 characters/],
     ['an icon is not a web address', { 'a@docker': { icon: 'jellyfin.svg' } }, /icon for route "a@docker" must be the http:\/\/ or https:\/\/ address/],
+    ['hidden is not true or false', { 'a@docker': { hidden: 'yes' } }, /"hidden" for route "a@docker" must be true or false/],
     ['an icon uses another scheme', { 'a@docker': { icon: 'javascript:alert(1)' } }, /must be the http:\/\/ or https:\/\/ address/],
   ];
   for (const [when, input, message] of invalid) {
@@ -208,6 +216,18 @@ describe('createConfigStore', () => {
     await store.saveRoute('a@docker', { name: 'App' });
     assert.equal(await store.saveRoute('a@docker', { name: '', icon: '' }), null);
     assert.deepEqual(JSON.parse(await fs.readFile(file, 'utf8')), {});
+  });
+
+  it('keeps the fields a save leaves out', async () => {
+    const store = createConfigStore({ file });
+    await store.saveRoute('a@docker', { name: 'App', icon: 'https://cdn.test/app.png' });
+    assert.deepEqual(await store.saveRoute('a@docker', { hidden: true }), { name: 'App', icon: 'https://cdn.test/app.png', hidden: true });
+    assert.deepEqual(await store.saveRoute('a@docker', { name: 'Renamed' }), { name: 'Renamed', icon: 'https://cdn.test/app.png', hidden: true });
+    assert.deepEqual(await store.saveRoute('a@docker', { hidden: false, icon: '' }), { name: 'Renamed' });
+  });
+
+  it('refuses a hidden flag that is not true or false before saving', async () => {
+    await assert.rejects(createConfigStore({ file }).saveRoute('a@docker', { hidden: 1 }), { status: 400 });
   });
 
   it('refuses to save route settings over a file that does not parse', async () => {
