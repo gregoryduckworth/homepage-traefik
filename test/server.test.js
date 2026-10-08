@@ -1,9 +1,9 @@
-const { describe, it, before, after } = require('node:test');
+const { describe, it, before, after, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const { createServer, createRouteStore } = require('../src/server');
+const { createServer, createRouteStore, readSeconds } = require('../src/server');
 const { createConfigStore } = require('../src/config');
 
 function jsonResponse(body) {
@@ -131,4 +131,123 @@ describe('server', () => {
     const res = await fetch(`${base}/%E0%A4%A`);
     assert.equal(res.status, 404);
   });
+});
+
+describe('createRouteStore health checks', () => {
+  const HOUR = 60 * 60 * 1000;
+  let clock;
+  let checked;
+  let routers;
+
+  function makeStore(options = {}) {
+    const fetchImpl = async () => jsonResponse(routers);
+    const checkRoutes = async routes => {
+      checked.push(routes.map(route => route.id));
+      return new Map(routes.map(route => [route.id, { reachable: true, statusCode: 200, checkedAt: new Date(clock).toISOString() }]));
+    };
+    return createRouteStore({ traefikUrl: 'http://traefik:8080', fetchImpl, checkRoutes, healthIntervalMs: HOUR, now: () => clock, ...options });
+  }
+
+  beforeEach(() => {
+    clock = Date.parse('2026-01-01T00:00:00Z');
+    checked = [];
+    routers = [
+      { name: 'a@docker', rule: 'Host(`a.test`)', status: 'enabled' },
+      { name: 'b@docker', rule: 'Host(`b.test`)', status: 'enabled' },
+    ];
+  });
+
+  it('checks each route at most once per interval however often Traefik is polled', async () => {
+    const store = makeStore();
+    for (const minutes of [0, 1, 30, 59]) {
+      clock = Date.parse('2026-01-01T00:00:00Z') + minutes * 60 * 1000;
+      await store.refresh();
+      await store.refreshHealth();
+    }
+    assert.deepEqual(checked, [['a@docker', 'b@docker']]);
+  });
+
+  it('checks routes again once the interval has passed', async () => {
+    const store = makeStore();
+    await store.refresh();
+    await store.refreshHealth();
+    clock += HOUR;
+    assert.equal(await store.refreshHealth(), true);
+    assert.deepEqual(checked, [['a@docker', 'b@docker'], ['a@docker', 'b@docker']]);
+  });
+
+  it('checks a new route straight away without checking the others again', async () => {
+    const store = makeStore();
+    await store.refresh();
+    await store.refreshHealth();
+    routers.push({ name: 'c@docker', rule: 'Host(`c.test`)', status: 'enabled' });
+    await store.refresh();
+    await store.refreshHealth();
+    assert.deepEqual(checked, [['a@docker', 'b@docker'], ['c@docker']]);
+  });
+
+  it('checks a route again when its URL changes', async () => {
+    const store = makeStore();
+    await store.refresh();
+    await store.refreshHealth();
+    routers[0].rule = 'Host(`a.test`) && PathPrefix(`/app`)';
+    await store.refresh();
+    await store.refreshHealth();
+    assert.deepEqual(checked, [['a@docker', 'b@docker'], ['a@docker']]);
+  });
+
+  it('starts from saved results and waits out their interval', async () => {
+    const saved = new Map([
+      ['a@docker', { url: 'http://a.test', reachable: true, statusCode: 204, checkedAt: new Date(clock - HOUR / 2).toISOString() }],
+      ['b@docker', { url: 'http://b.test', reachable: true, statusCode: 200, checkedAt: new Date(clock - HOUR).toISOString() }],
+    ]);
+    const store = makeStore({ health: saved });
+    await store.refresh();
+    await store.refreshHealth();
+    assert.deepEqual(checked, [['b@docker']]);
+    assert.equal(store.getRoutesWithHealth()[0].health.statusCode, 204);
+  });
+
+  it('forgets routes Traefik no longer serves', async () => {
+    const store = makeStore();
+    await store.refresh();
+    await store.refreshHealth();
+    routers.pop();
+    await store.refresh();
+    assert.equal(await store.refreshHealth(), true);
+    assert.deepEqual(Object.keys(store.getHealth()), ['a@docker']);
+  });
+
+  it('keeps saved results while Traefik has not answered yet', async () => {
+    const saved = new Map([['a@docker', { url: 'http://a.test', checkedAt: new Date(clock).toISOString() }]]);
+    const store = makeStore({ health: saved, fetchImpl: async () => { throw new Error('down'); } });
+    await store.refresh();
+    assert.equal(await store.refreshHealth(), false);
+    assert.deepEqual(Object.keys(store.getHealth()), ['a@docker']);
+  });
+
+  it('reports nothing to save when no route was due', async () => {
+    const store = makeStore();
+    await store.refresh();
+    await store.refreshHealth();
+    assert.equal(await store.refreshHealth(), false);
+  });
+});
+
+describe('readSeconds', () => {
+  const opts = { fallback: 30, min: 5 };
+  const cases = [
+    ['uses the default when unset', {}, 30],
+    ['uses the default when empty', { POLL: ' ' }, 30],
+    ['uses the default when not a number', { POLL: 'often' }, 30],
+    ['raises zero to the minimum', { POLL: '0' }, 5],
+    ['raises a negative value to the minimum', { POLL: '-10' }, 5],
+    ['accepts a value at or above the minimum', { POLL: '120' }, 120],
+  ];
+  for (const [name, env, expected] of cases) {
+    it(name, t => {
+      t.mock.method(console, 'warn', () => {});
+      assert.equal(readSeconds(env, 'POLL', opts), expected);
+    });
+  }
 });
