@@ -49,6 +49,32 @@ describe('createConfigStore', () => {
     assert.deepEqual([config.groups, config.error], [[], null]);
   });
 
+  it('treats an empty file as having no groups', async () => {
+    await fs.mkdir(path.dirname(file));
+    await fs.writeFile(file, '');
+    const config = await createConfigStore({ file }).read();
+    assert.deepEqual([config.groups, config.error], [[], null]);
+  });
+
+  it('explains that a directory at the file path comes from mounting a missing file', async () => {
+    await fs.mkdir(file, { recursive: true });
+    const config = await createConfigStore({ file }).read();
+    assert.match(config.error, /is a directory, not a file\. Docker creates a directory when the file you mount doesn't exist/);
+  });
+
+  it('overwrites the file in place when its directory is not writable, as with a single-file mount', async () => {
+    await fs.mkdir(path.dirname(file));
+    await fs.writeFile(file, '{}');
+    await fs.chmod(path.dirname(file), 0o555);
+    try {
+      await createConfigStore({ file }).saveGroups([{ name: 'Media' }]);
+    } finally {
+      await fs.chmod(path.dirname(file), 0o755);
+    }
+    const saved = JSON.parse(await fs.readFile(file, 'utf8'));
+    assert.deepEqual(saved.groups, [{ name: 'Media', routes: [] }]);
+  });
+
   it('creates the file and its directory when groups are saved', async () => {
     await createConfigStore({ file }).saveGroups([{ name: 'Media', routes: ['jellyfin@docker'] }]);
     const saved = JSON.parse(await fs.readFile(file, 'utf8'));

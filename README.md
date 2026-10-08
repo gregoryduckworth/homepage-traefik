@@ -7,10 +7,11 @@ The app is a single Node.js process with no runtime dependencies.
 ## Quick start with Docker Compose
 
 ```sh
+touch homepage.json
 docker compose up -d
 ```
 
-Then open <http://home.localhost>. The example `docker-compose.yml` starts Traefik, this homepage, and a `whoami` demo service, so you should see both `home.localhost` and `whoami.localhost` listed.
+`homepage.json` is where the groups you make on the page are saved (see [Groups](#groups)). Then open <http://home.localhost>. The example `docker-compose.yml` starts Traefik, this homepage, and a `whoami` demo service, so you should see both `home.localhost` and `whoami.localhost` listed.
 
 ## Using the pre-built Docker image
 
@@ -32,14 +33,11 @@ services:
       TRAEFIK_API_URL: http://traefik:8080
       HOMEPAGE_TITLE: Home lab
     volumes:
-      - homepage-config:/app/config
+      - ./homepage.json:/app/config/homepage.json
     labels:
       - traefik.enable=true
       - traefik.http.routers.homepage.rule=Host(`home.example.com`)
       - traefik.http.services.homepage.loadbalancer.server.port=3000
-
-volumes:
-  homepage-config:
 ```
 
 ## Adding it to an existing Traefik setup
@@ -114,7 +112,22 @@ Groups are saved on the server, so everyone who opens the page sees the same lay
 - Routes that Traefik isn't serving right now stay in the file and return to their group when they come back.
 - The page picks up changes to the file within one refresh, without a restart. If the file isn't valid, the page says why and keeps showing the last groups it loaded, and changes from the page are refused until the file is fixed.
 
-To keep the file across container rebuilds, mount a volume on `/app/config` as in the examples above. If you use a bind mount instead, make sure the directory is writable by the container's `node` user (UID 1000). Anyone who can open the homepage can change the groups.
+Anyone who can open the homepage can change the groups.
+
+### Keeping the file with your Compose project
+
+Mount the file into the container so it survives rebuilds and lives next to your `docker-compose.yml`, where you can back it up, commit it or copy it to another machine:
+
+```yaml
+    volumes:
+      - ./homepage.json:/app/config/homepage.json
+```
+
+- Create the file before the first `docker compose up`. An empty file is fine (`touch homepage.json`), and so is one you've copied from another setup. If the file doesn't exist, Docker creates a directory with that name instead, and the page tells you to replace it with a file. The same happens on Docker Desktop or Colima if the file is in a folder they don't share with Docker; both share your home folder by default.
+- The container runs as the `node` user (UID 1000), which needs to be able to write the file. If your host user has a different UID, run `chmod a+w homepage.json`, or set `user:` on the service to your own UID.
+- Some editors save by replacing the file rather than rewriting it, and a container keeps seeing the old one until it's recreated. If a hand edit doesn't show up, run `docker compose up -d --force-recreate homepage`.
+
+If you'd rather not keep the file in your project, mount a named volume on the whole directory instead (`homepage-config:/app/config`). Docker then creates the file for you.
 
 ## API
 

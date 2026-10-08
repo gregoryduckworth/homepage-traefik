@@ -38,6 +38,8 @@ function normalizeGroups(input) {
 }
 
 function parseConfig(text) {
+  // An empty file (say, one just created with touch so it can be mounted) means no groups yet.
+  if (!text.trim()) return { doc: {}, groups: [] };
   const doc = JSON.parse(text);
   if (!doc || typeof doc !== 'object' || Array.isArray(doc)) throw new ConfigError('expected a JSON object with a "groups" list');
   return { doc, groups: normalizeGroups(doc.groups ?? []) };
@@ -58,6 +60,15 @@ function createConfigStore({ file }) {
       return cache;
     }
 
+    if (stat.isDirectory()) {
+      cache = {
+        ...cache,
+        version: null,
+        error: `${file} is a directory, not a file. Docker creates a directory when the file you mount doesn't exist on the host, or is in a folder Docker can't see: create the file (an empty one is fine), remove the directory Docker made and recreate the container`,
+      };
+      return cache;
+    }
+
     const version = `${stat.mtimeMs}:${stat.size}`;
     if (version === cache.version) return cache;
     try {
@@ -69,17 +80,20 @@ function createConfigStore({ file }) {
     return cache;
   }
 
+  // Writing beside the file and renaming it over the top means a reader never sees half a file. That isn't
+  // possible for a file bind-mounted on its own, or one in a directory the container can't write to, so an
+  // existing file is overwritten in place instead.
   async function write(text) {
-    await fs.mkdir(path.dirname(file), { recursive: true });
     const tmp = `${file}.tmp`;
-    await fs.writeFile(tmp, text);
     try {
+      await fs.mkdir(path.dirname(file), { recursive: true });
+      await fs.writeFile(tmp, text);
       await fs.rename(tmp, file);
     } catch (err) {
-      // A file bind-mounted on its own can't be replaced by rename, only overwritten in place.
-      if (err.code !== 'EBUSY' && err.code !== 'EXDEV') throw err;
+      await fs.rm(tmp, { force: true }).catch(() => {});
+      const exists = await fs.stat(file).then(() => true, () => false);
+      if (!exists) throw err;
       await fs.writeFile(file, text);
-      await fs.rm(tmp, { force: true });
     }
   }
 
@@ -92,7 +106,7 @@ function createConfigStore({ file }) {
       try {
         await write(`${JSON.stringify(doc, null, 2)}\n`);
       } catch (err) {
-        throw new ConfigError(`Can't write ${file} (${err.code || err.message}). Check that its directory is writable by the container.`, 500);
+        throw new ConfigError(`Can't write ${file} (${err.code || err.message}). Check that the container's node user (UID 1000) can write to it.`, 500);
       }
       return (await read()).groups;
     });
