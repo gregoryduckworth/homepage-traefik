@@ -85,6 +85,10 @@ function parseConfig(text) {
   return { doc, groups: normalizeGroups(doc.groups ?? []), routes: normalizeRouteSettings(doc.routes ?? {}) };
 }
 
+function versionOf(stat) {
+  return `${stat.mtimeMs}:${stat.size}`;
+}
+
 // The file is re-read whenever it changes on disk, so hand edits show up without a restart.
 function createConfigStore({ file }) {
   const empty = { version: null, doc: {}, groups: [], routes: {}, error: null };
@@ -109,7 +113,7 @@ function createConfigStore({ file }) {
       return cache;
     }
 
-    const version = `${stat.mtimeMs}:${stat.size}`;
+    const version = versionOf(stat);
     if (version === cache.version) return cache;
     try {
       cache = { version, ...parseConfig(await fs.readFile(file, 'utf8')), error: null };
@@ -145,67 +149,66 @@ function createConfigStore({ file }) {
     }
   }
 
-  async function saveGroups(input) {
-    const groups = normalizeGroups(input);
-    const run = writing.then(async () => {
-      const current = await read();
-      if (current.error) throw new ConfigError(`${current.error}. Fix the file before changing groups here.`, 409);
-      const doc = { ...current.doc, groups };
-      try {
-        await write(`${JSON.stringify(doc, null, 2)}\n`);
-      } catch (err) {
-        throw new ConfigError(`Can't write ${file} (${err.code || err.message}). Check that the container's node user (UID 1000) can write to it.`, 500);
-      }
-      // Cache what was written rather than re-reading it: two saves of the same size within the file system's
-      // timestamp resolution would otherwise look unchanged and return the earlier groups.
-      const stat = await fs.stat(file);
-      cache = { ...current, version: `${stat.mtimeMs}:${stat.size}`, doc, groups, error: null };
-      return groups;
-    });
+  // Saves run one at a time, each on top of the file as the previous one left it.
+  function queue(task) {
+    const run = writing.then(task);
     writing = run.catch(() => {});
     return run;
+  }
+
+  // A change made on the page isn't saved over a file that doesn't parse, which would throw away the hand edits.
+  async function readForChange(what) {
+    const current = await read();
+    if (current.error) throw new ConfigError(`${current.error}. Fix the file before changing ${what} here.`, 409);
+    return current;
+  }
+
+  // Writes `doc` and caches it along with the parsed fields it changed. Caching what was written rather than
+  // re-reading it matters: two saves of the same size within the file system's timestamp resolution would otherwise
+  // look unchanged and return the earlier contents.
+  async function commit(current, doc, changed = {}) {
+    try {
+      await write(`${JSON.stringify(doc, null, 2)}\n`);
+    } catch (err) {
+      throw new ConfigError(`Can't write ${file} (${err.code || err.message}). Check that the container's node user (UID 1000) can write to it.`, 500);
+    }
+    cache = { ...current, ...changed, version: versionOf(await fs.stat(file)), doc, error: null };
+  }
+
+  async function saveGroups(input) {
+    const groups = normalizeGroups(input);
+    return queue(async () => {
+      const current = await readForChange('groups');
+      await commit(current, { ...current.doc, groups }, { groups });
+      return groups;
+    });
   }
 
   // Sets or clears one route's name and icon. Returns the saved setting, or null when both were cleared.
   async function saveRoute(id, input) {
     if (typeof id !== 'string' || !id) throw new ConfigError('Give the router name of the route to change');
     const setting = normalizeRouteSetting(input);
-    const run = writing.then(async () => {
-      const current = await read();
-      if (current.error) throw new ConfigError(`${current.error}. Fix the file before changing routes here.`, 409);
+    return queue(async () => {
+      const current = await readForChange('routes');
       // fromEntries defines own keys, so even a router named __proto__ is stored as a plain entry.
       const others = Object.entries(current.routes).filter(([key]) => key !== id);
       const routes = Object.fromEntries(setting ? [...others, [id, setting]] : others);
       if (Object.keys(routes).length > MAX_ROUTE_SETTINGS) throw new ConfigError(`There can be at most ${MAX_ROUTE_SETTINGS} entries in "routes"`);
       const { routes: _routes, ...rest } = current.doc;
-      const doc = Object.keys(routes).length ? { ...current.doc, routes } : rest;
-      try {
-        await write(`${JSON.stringify(doc, null, 2)}\n`);
-      } catch (err) {
-        throw new ConfigError(`Can't write ${file} (${err.code || err.message}). Check that the container's node user (UID 1000) can write to it.`, 500);
-      }
-      const stat = await fs.stat(file);
-      cache = { ...current, version: `${stat.mtimeMs}:${stat.size}`, doc, routes, error: null };
+      await commit(current, Object.keys(routes).length ? { ...current.doc, routes } : rest, { routes });
       return setting;
     });
-    writing = run.catch(() => {});
-    return run;
   }
 
   // Stores the latest health check of each route beside the groups, so a restart can show them straight away
   // and wait out the interval instead of checking every route again. A file that doesn't parse is left alone.
   async function saveHealth(health) {
-    const run = writing.then(async () => {
+    return queue(async () => {
       const current = await read();
       if (current.error) return false;
-      const doc = { ...current.doc, health };
-      await write(`${JSON.stringify(doc, null, 2)}\n`);
-      const stat = await fs.stat(file);
-      cache = { ...current, version: `${stat.mtimeMs}:${stat.size}`, doc };
+      await commit(current, { ...current.doc, health });
       return true;
     });
-    writing = run.catch(() => {});
-    return run;
   }
 
   return { file, read, saveGroups, saveRoute, saveHealth };

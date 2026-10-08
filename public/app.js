@@ -428,6 +428,18 @@ function render() {
   }
 }
 
+// Resolves to the server's reply, or throws with the reason it gives for refusing the change.
+async function putJson(url, body) {
+  const res = await fetch(url, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const reply = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(reply.error || `The homepage server responded with HTTP ${res.status}`);
+  return reply;
+}
+
 // Saving is optimistic: the page shows the change at once. If the server refuses it, the page goes back to the
 // groups the server last confirmed and reloads them, which stays correct even when several saves were in flight.
 async function saveGroups(groups) {
@@ -439,13 +451,7 @@ async function saveGroups(groups) {
   render();
   let failed = false;
   try {
-    const res = await fetch('api/groups', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ groups }),
-    });
-    const body = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(body.error || `The homepage server responded with HTTP ${res.status}`);
+    const body = await putJson('api/groups', { groups });
     confirmedGroups = body.groups;
     // A later save still in flight holds newer groups than this response. Once none is, the server has every
     // change made on the page, including any whose own save failed, so an earlier error no longer applies.
@@ -555,13 +561,7 @@ els.routeForm.addEventListener('submit', async event => {
   const id = editingRoute;
   els.routeSubmit.disabled = true;
   try {
-    const res = await fetch(`api/routes/${encodeURIComponent(id)}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: els.routeName.value, icon: els.routeIcon.value }),
-    });
-    const body = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(body.error || `The homepage server responded with HTTP ${res.status}`);
+    const body = await putJson(`api/routes/${encodeURIComponent(id)}`, { name: els.routeName.value, icon: els.routeIcon.value });
     const route = data.routes.find(r => r.id === id);
     if (route) route.custom = body.custom;
     els.routeDialog.close();
