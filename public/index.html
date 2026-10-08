@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Routes</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Overpass:wght@400;600;800&display=swap">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="masthead">
+    <h1 id="title">Routes</h1>
+    <p class="summary" id="summary" aria-live="polite">Looking up routes…</p>
+    <label class="filter">
+      <span class="visually-hidden">Filter routes</span>
+      <input id="filter" type="search" placeholder="Filter routes" autocomplete="off" spellcheck="false">
+    </label>
+  </header>
+
+  <main>
+    <div class="notice" id="notice" role="alert" hidden></div>
+    <div id="lines"></div>
+    <p class="empty" id="empty" hidden></p>
+  </main>
+
+  <template id="line-template">
+    <section class="line">
+      <h2 class="line-name"></h2>
+      <ol class="stations"></ol>
+    </section>
+  </template>
+
+  <template id="station-template">
+    <li class="station">
+      <a class="host" target="_blank" rel="noopener noreferrer"></a>
+      <p class="details">
+        <span class="service"></span>
+        <span class="state"></span>
+      </p>
+    </li>
+  </template>
+
+  <script src="app.js"></script>
+</body>
+</html>

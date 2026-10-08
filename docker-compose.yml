@@ -1,0 +1,36 @@
+# Example stack: Traefik, the homepage, and a demo service.
+# Run `docker compose up -d`, then open http://home.localhost and http://whoami.localhost.
+services:
+  traefik:
+    image: traefik:v3.1
+    command:
+      - --api.insecure=true # exposes the API on :8080 inside the Docker network
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+    ports:
+      - "80:80"
+      - "8080:8080" # Traefik's own dashboard; remove if you don't need it on the host
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+  homepage:
+    build: .
+    environment:
+      TRAEFIK_API_URL: http://traefik:8080
+      HOMEPAGE_TITLE: Home lab
+      POLL_INTERVAL_SECONDS: 30
+    depends_on:
+      - traefik
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.homepage.rule=Host(`home.localhost`)
+      - traefik.http.routers.homepage.entrypoints=web
+      - traefik.http.services.homepage.loadbalancer.server.port=3000
+
+  whoami:
+    image: traefik/whoami
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.whoami.rule=Host(`whoami.localhost`)
+      - traefik.http.routers.whoami.entrypoints=web
