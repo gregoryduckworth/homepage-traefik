@@ -2,7 +2,7 @@ const { describe, it, after, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
 const net = require('node:net');
-const { findIcon, iconLinks, sniffImage, createIconStore } = require('../src/favicon');
+const { findIcon, iconLinks, sniffImage, parseSavedIcons, createIconStore } = require('../src/favicon');
 
 const TIMEOUT_MS = 500;
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
@@ -238,5 +238,77 @@ describe('createIconStore', () => {
     release();
     await Promise.all([first, second]);
     assert.equal(lookups.length, 1);
+  });
+
+  it('tells onChange about a route only when its icon is a different one', async () => {
+    const changed = [];
+    const store = makeStore({ onChange: id => changed.push(id) });
+    await store.refresh([route('a')]);
+    clock += 24 * HOUR;
+    await store.refresh([route('a')]);
+    found = { ...found, hash: 'def' };
+    clock += 24 * HOUR;
+    await store.refresh([route('a')]);
+    assert.deepEqual(changed, ['a', 'a']);
+  });
+
+  it('resolves a refresh to whether the icons worth saving changed', async () => {
+    const store = makeStore();
+    assert.equal(await store.refresh([route('a')]), true);
+    assert.equal(await store.refresh([route('a')]), false);
+    assert.equal(await store.refresh([]), true);
+    found = null;
+    assert.equal(await store.refresh([route('b')]), false);
+  });
+
+  it('serves saved icons without looking them up until they are due', async () => {
+    const saved = new Map([['a', { url: 'http://a.test', checkedAt: clock - 23 * HOUR, icon: found }]]);
+    const store = makeStore({ saved });
+    await store.refresh([route('a')]);
+    assert.deepEqual(lookups, []);
+    assert.deepEqual(store.get('a'), found);
+    clock += HOUR;
+    await store.refresh([route('a')]);
+    assert.deepEqual(lookups, ['http://a.test']);
+  });
+
+  it('saves only the routes that have an icon, and loads them back', async () => {
+    const store = makeStore();
+    await store.refresh([route('a')]);
+    found = null;
+    await store.refresh([route('a'), route('b')]);
+    const saved = parseSavedIcons(store.serialize());
+    assert.deepEqual([...saved.keys()], ['a']);
+    const { url, checkedAt, icon } = saved.get('a');
+    assert.deepEqual([url, checkedAt, icon.type, icon.body], ['http://a.test', clock, 'image/png', PNG]);
+  });
+});
+
+describe('parseSavedIcons', () => {
+  const entry = (data, extra = {}) => ({ url: 'http://a.test', checkedAt: '2026-01-01T00:00:00.000Z', data: data.toString('base64'), ...extra });
+
+  it('takes the type and hash from the image rather than the file', () => {
+    const icon = parseSavedIcons(JSON.stringify({ a: entry(ICO, { type: 'text/html', hash: 'x' }) })).get('a').icon;
+    assert.equal(icon.type, 'image/x-icon');
+    assert.match(icon.hash, /^[0-9a-f]{12}$/);
+  });
+
+  it('drops entries that are not an image or are missing fields', () => {
+    const saved = parseSavedIcons(JSON.stringify({
+      html: entry(Buffer.from('<html><body>login</body></html>')),
+      nourl: entry(PNG, { url: null }),
+      nodate: entry(PNG, { checkedAt: 'soon' }),
+      nodata: { url: 'http://a.test', checkedAt: '2026-01-01T00:00:00.000Z' },
+      ok: entry(PNG),
+    }));
+    assert.deepEqual([...saved.keys()], ['ok']);
+  });
+
+  it('loads nothing from an empty file', () => {
+    assert.equal(parseSavedIcons(' \n').size, 0);
+  });
+
+  it('loads nothing from a file that is not an object', () => {
+    assert.equal(parseSavedIcons('[]').size, 0);
   });
 });

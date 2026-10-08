@@ -4,7 +4,9 @@ const path = require('node:path');
 const { fetchRouters, normalizeRouters } = require('./traefik');
 const { checkAllRoutes, isCheckable } = require('./healthcheck');
 const { ConfigError, storedHealth, createConfigStore } = require('./config');
-const { createIconStore } = require('./favicon');
+const { createIconStore, parseSavedIcons } = require('./favicon');
+const { createEvents } = require('./events');
+const { writeSafely } = require('./files');
 
 const PUBLIC_DIR = path.resolve(__dirname, '..', 'public');
 
@@ -34,7 +36,9 @@ function createRouteStore({
   // Keyed by route id. Each result records the URL it checked, so a route whose URL changes is checked again.
   let healthResults = new Map(health);
 
+  // Resolves to whether the routes or the error changed.
   async function refresh() {
+    const before = JSON.stringify([state.routes, state.error]);
     try {
       state.routes = normalizeRouters(await fetchRouters(traefikUrl, { fetchImpl }));
       state.updatedAt = new Date().toISOString();
@@ -49,6 +53,7 @@ function createRouteStore({
       }
       console.error(`Route refresh failed: ${state.error}`);
     }
+    return JSON.stringify([state.routes, state.error]) !== before;
   }
 
   function isDue(route) {
@@ -113,18 +118,21 @@ async function readJson(req) {
   }
 }
 
-// Reads a JSON body for a PUT and replies with whatever `save` returns, or with the error.
+// Reads a JSON body for a PUT and replies with whatever `save` returns, or with the error. Resolves to whether
+// the change was saved.
 async function handlePut(req, res, what, save) {
   if (req.method !== 'PUT') {
     res.writeHead(405, { Allow: 'PUT', 'Content-Type': 'text/plain' }).end('Method not allowed');
-    return;
+    return false;
   }
   try {
     sendJson(res, 200, await save(await readJson(req)));
+    return true;
   } catch (err) {
     const status = err instanceof ConfigError ? err.status : 500;
     if (status >= 500) console.error(`Saving ${what} failed: ${err.message}`);
     if (!res.headersSent) sendJson(res, status, { error: err instanceof ConfigError ? err.message : `Saving ${what} failed` });
+    return false;
   }
 }
 
@@ -158,7 +166,8 @@ function pathParam(pathname, prefix) {
   }
 }
 
-function createServer({ store, config, title, icons = { get: () => null } }) {
+// `events`, when given, serves /api/events and tells other open pages about changes saved here.
+function createServer({ store, config, title, icons = { get: () => null }, events = null }) {
   return http.createServer(async (req, res) => {
     const { pathname } = new URL(req.url, 'http://localhost');
 
@@ -181,12 +190,17 @@ function createServer({ store, config, title, icons = { get: () => null } }) {
 
     if (pathname.startsWith('/api/routes/')) {
       const id = pathParam(pathname, '/api/routes/');
-      await handlePut(req, res, 'the route', async body => ({ custom: await config.saveRoute(id, body) }));
+      if (await handlePut(req, res, 'the route', async body => ({ custom: await config.saveRoute(id, body) }))) events?.notify();
       return;
     }
 
     if (pathname === '/api/groups') {
-      await handlePut(req, res, 'groups', async body => ({ groups: await config.saveGroups(body?.groups) }));
+      if (await handlePut(req, res, 'groups', async body => ({ groups: await config.saveGroups(body?.groups) }))) events?.notify();
+      return;
+    }
+
+    if (pathname === '/api/events' && events) {
+      events.handle(req, res);
       return;
     }
 
@@ -211,6 +225,25 @@ function createServer({ store, config, title, icons = { get: () => null } }) {
       res.writeHead(404, { 'Content-Type': 'text/plain' }).end('Not found');
     }
   });
+}
+
+// Runs `task` one call at a time. A failure is logged once rather than on every call while it keeps failing, say
+// while the file stays unwritable.
+function saveQuietly(what, task) {
+  let queue = Promise.resolve();
+  let lastError = null;
+  return () => {
+    queue = queue.then(async () => {
+      try {
+        await task();
+        lastError = null;
+      } catch (err) {
+        if (err.message !== lastError) console.error(`${what} failed: ${err.message}`);
+        lastError = err.message;
+      }
+    });
+    return queue;
+  };
 }
 
 // A missing, mistyped or tiny interval would otherwise poll back to back, so it falls back to the default or is
@@ -243,47 +276,57 @@ if (require.main === module) {
     address: process.env.HEALTHCHECK_ADDRESS || undefined,
   };
 
-  const config = createConfigStore({ file: configFile });
-  let store;
-  let saveError = null;
-  const saveHealth = async () => {
-    try {
-      await config.saveHealth(store.getHealth());
-      saveError = null;
-    } catch (err) {
-      // Log once rather than on every check while the file stays unwritable.
-      if (err.message !== saveError) console.error(`Saving health checks to ${configFile} failed: ${err.message}`);
-      saveError = err.message;
+  // Icons found on the sites are saved beside the config file, so a restart shows them straight away.
+  const iconsFile = path.join(path.dirname(configFile), 'icons.json');
+  const loadIcons = () => fs.readFile(iconsFile, 'utf8').then(parseSavedIcons).catch(err => {
+    if (err.code === 'EISDIR') {
+      console.warn(`${iconsFile} is a directory, not a file, so icons won't be saved. Docker creates a directory when the file you mount doesn't exist on the host: create the file (an empty one is fine), remove the directory Docker made and recreate the container`);
+    } else if (err.code !== 'ENOENT') {
+      console.warn(`Ignoring ${iconsFile}: ${err.message}`);
     }
-  };
-
-  // Icons are looked up even for routes with one set in the config file, so the page can fall back to the
-  // site's own icon if that one doesn't load.
-  const icons = createIconStore({ options: healthOptions });
-  const refreshIcons = () => icons.refresh(store.getRoutesWithHealth()).catch(err => {
-    console.error(`Looking up route icons failed: ${err.message}`);
+    return new Map();
   });
 
-  // Skip a tick if the previous cycle is still running, so a slow probe can't overwrite newer results. Icons are
-  // looked up in the background, so a slow site can't hold up the next poll.
-  let polling = false;
-  const poll = async () => {
-    if (polling) return;
-    polling = true;
-    try {
-      await store.refresh();
-      if (await store.refreshHealth()) await saveHealth();
-      refreshIcons();
-    } finally {
-      polling = false;
-    }
-  };
+  const config = createConfigStore({ file: configFile });
+  const events = createEvents();
 
-  config.read().then(({ doc }) => {
-    store = createRouteStore({ traefikUrl, fetchImpl: fetch, healthOptions, healthIntervalMs: healthSeconds * 1000, health: storedHealth(doc) });
-    const server = createServer({ store, config, title, icons });
+  Promise.all([config.read(), loadIcons()]).then(([{ doc }, savedIcons]) => {
+    const store = createRouteStore({ traefikUrl, fetchImpl: fetch, healthOptions, healthIntervalMs: healthSeconds * 1000, health: storedHealth(doc) });
+    // Icons are looked up even for routes with one set in the config file, so the page can fall back to the
+    // site's own icon if that one doesn't load.
+    const icons = createIconStore({ options: healthOptions, saved: savedIcons, onChange: events.notify });
+    const saveHealth = saveQuietly(`Saving health checks to ${configFile}`, () => config.saveHealth(store.getHealth()));
+    const saveIcons = saveQuietly(`Saving icons to ${iconsFile}`, () => writeSafely(iconsFile, icons.serialize()));
+    const refreshIcons = () => icons.refresh(store.getRoutesWithHealth()).then(changed => changed && saveIcons(), err => {
+      console.error(`Looking up route icons failed: ${err.message}`);
+    });
+
+    // Skip a tick if the previous cycle is still running, so a slow probe can't overwrite newer results. Icons are
+    // looked up in the background, so a slow site can't hold up the next poll. Until Traefik has answered once
+    // there are no routes, and refreshing the icons would forget the saved ones.
+    let polling = false;
+    const poll = async () => {
+      if (polling) return;
+      polling = true;
+      try {
+        const routesChanged = await store.refresh();
+        const healthChanged = await store.refreshHealth();
+        if (routesChanged || healthChanged) events.notify();
+        if (healthChanged) await saveHealth();
+        if (store.state.updatedAt) refreshIcons();
+      } finally {
+        polling = false;
+      }
+    };
+
+    const server = createServer({ store, config, title, icons, events });
     server.listen(port, () => console.log(`Homepage on :${port}, reading routes from ${traefikUrl} every ${pollSeconds}s, checking each route every ${healthSeconds}s, groups from ${configFile}`));
-    for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => server.close(() => process.exit(0)));
+    for (const signal of ['SIGINT', 'SIGTERM']) {
+      process.on(signal, () => {
+        events.close();
+        server.close(() => process.exit(0));
+      });
+    }
     poll();
     setInterval(poll, pollSeconds * 1000).unref();
   });

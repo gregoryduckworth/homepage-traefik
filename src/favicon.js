@@ -131,6 +131,12 @@ function sniffImage(body) {
   return null;
 }
 
+// The icon in `body`, or null when it isn't an image.
+function iconOf(body) {
+  const type = sniffImage(body);
+  return type && { type, body, hash: crypto.createHash('sha1').update(body).digest('hex').slice(0, 12) };
+}
+
 // Looks for a route's icon the way a browser would: the icons its page links to, then /favicon.ico.
 // Resolves to { type, body, hash }, or null when nothing usable was found.
 async function findIcon(pageUrl, { timeoutMs = DEFAULT_TIMEOUT_MS, address, lookup } = {}) {
@@ -147,9 +153,8 @@ async function findIcon(pageUrl, { timeoutMs = DEFAULT_TIMEOUT_MS, address, look
 
   for (const url of new Set(candidates)) {
     try {
-      const { body } = await get(url, { ...opts, maxBytes: MAX_ICON_BYTES });
-      const type = sniffImage(body);
-      if (type) return { type, body, hash: crypto.createHash('sha1').update(body).digest('hex').slice(0, 12) };
+      const icon = iconOf((await get(url, { ...opts, maxBytes: MAX_ICON_BYTES })).body);
+      if (icon) return icon;
     } catch {
       // Try the next candidate.
     }
@@ -161,9 +166,28 @@ function isReachable(route) {
   return isCheckable(route) && route.health?.reachable && route.health.statusCode < 500;
 }
 
-// Keeps the icon found for each route in memory. A route is looked up once it's reachable, again when its URL
-// changes, every `refreshMs` after an icon was found and every `retryMs` after none was. Lookups run in the
-// background a few at a time, and a refresh that's already running is reused rather than started twice.
+// Icons saved by `serialize`, keyed by route id. The saved file is only a cache, so entries that aren't an image
+// are dropped rather than reported, and each icon's type and hash come from its bytes, not the file.
+function parseSavedIcons(text) {
+  // An empty file (say, one just created with touch so it can be mounted) means no icons yet.
+  if (!text.trim()) return new Map();
+  const doc = JSON.parse(text);
+  const entries = doc && typeof doc === 'object' && !Array.isArray(doc) ? Object.entries(doc) : [];
+  const saved = new Map();
+  for (const [id, entry] of entries) {
+    if (typeof entry?.url !== 'string' || typeof entry.data !== 'string') continue;
+    const checkedAt = Date.parse(entry.checkedAt);
+    const body = Buffer.from(entry.data, 'base64');
+    const icon = body.length <= MAX_ICON_BYTES && iconOf(body);
+    if (icon && !Number.isNaN(checkedAt)) saved.set(id, { url: entry.url, checkedAt, icon });
+  }
+  return saved;
+}
+
+// Keeps the icon found for each route. A route is looked up once it's reachable, again when its URL changes,
+// every `refreshMs` after an icon was found and every `retryMs` after none was. Lookups run in the background a
+// few at a time, and a refresh that's already running is reused rather than started twice. `saved` holds icons
+// from an earlier run, and `onChange` is told the id of each route whose icon is now a different one.
 function createIconStore({
   find = findIcon,
   options = {},
@@ -171,9 +195,20 @@ function createIconStore({
   retryMs = HOUR_MS,
   concurrency = DEFAULT_CONCURRENCY,
   now = Date.now,
+  saved = new Map(),
+  onChange = () => {},
 } = {}) {
-  const entries = new Map();
+  const entries = new Map(saved);
   let running = null;
+
+  // Sets or removes one route's entry, and says whether that changed what `serialize` returns.
+  function set(id, entry) {
+    const before = entries.get(id);
+    if (entry) entries.set(id, entry);
+    else entries.delete(id);
+    if (before?.icon?.hash !== entry?.icon?.hash) onChange(id);
+    return Boolean(before?.icon || entry?.icon);
+  }
 
   function isDue(route) {
     const entry = entries.get(route.id);
@@ -181,12 +216,14 @@ function createIconStore({
     return now() - entry.checkedAt >= (entry.icon ? refreshMs : retryMs);
   }
 
-  // `routes` is every route the page lists; icons of routes that aren't in it are forgotten.
+  // `routes` is every route the page lists; icons of routes that aren't in it are forgotten. Resolves to whether
+  // the icons worth saving changed.
   async function refresh(routes) {
     if (running) return running;
     running = (async () => {
+      let changed = false;
       const ids = new Set(routes.map(route => route.id));
-      for (const id of entries.keys()) if (!ids.has(id)) entries.delete(id);
+      for (const id of [...entries.keys()]) if (!ids.has(id)) changed = set(id, null) || changed;
 
       const due = routes.filter(route => isReachable(route) && isDue(route));
       await mapLimit(due, concurrency, async route => {
@@ -194,8 +231,9 @@ function createIconStore({
         const icon = await find(route.url, options).catch(() => null);
         // A route that briefly fails keeps the icon it had, as long as its URL is the same.
         const kept = icon || (previous?.url === route.url ? previous.icon : null);
-        entries.set(route.id, { url: route.url, checkedAt: now(), icon: kept });
+        changed = set(route.id, { url: route.url, checkedAt: now(), icon: kept }) || changed;
       });
+      return changed;
     })().finally(() => {
       running = null;
     });
@@ -206,7 +244,16 @@ function createIconStore({
     return entries.get(id)?.icon || null;
   }
 
-  return { refresh, get };
+  // The icons found so far as JSON, with each image base64-encoded. Routes with no icon are left out, so they're
+  // looked up again after a restart.
+  function serialize() {
+    const saved = [...entries].filter(([, entry]) => entry.icon).map(([id, { url, checkedAt, icon }]) => (
+      [id, { url, checkedAt: new Date(checkedAt).toISOString(), data: icon.body.toString('base64') }]
+    ));
+    return `${JSON.stringify(Object.fromEntries(saved), null, 2)}\n`;
+  }
+
+  return { refresh, get, serialize };
 }
 
-module.exports = { findIcon, iconLinks, sniffImage, createIconStore };
+module.exports = { findIcon, iconLinks, sniffImage, parseSavedIcons, createIconStore };

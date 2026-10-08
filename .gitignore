@@ -3,3 +3,4 @@ node_modules
 config
 .playwright-mcp
 homepage.json
+icons.json

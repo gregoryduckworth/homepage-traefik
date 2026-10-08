@@ -5,6 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { createServer, createRouteStore, readSeconds } = require('../src/server');
 const { createConfigStore } = require('../src/config');
+const { createEvents } = require('../src/events');
 
 function jsonResponse(body) {
   return { ok: true, status: 200, headers: new Headers(), json: async () => body };
@@ -174,6 +175,50 @@ describe('server', () => {
   });
 });
 
+describe('server events', () => {
+  let server;
+  let events;
+  let base;
+  let configDir;
+
+  before(async () => {
+    configDir = await fs.mkdtemp(path.join(os.tmpdir(), 'homepage-events-'));
+    const config = createConfigStore({ file: path.join(configDir, 'homepage.json') });
+    const store = createRouteStore({ traefikUrl: 'http://traefik:8080', fetchImpl: async () => jsonResponse([]) });
+    events = createEvents({ delayMs: 10 });
+    server = createServer({ store, config, title: 'My lab', events });
+    await new Promise(resolve => server.listen(0, resolve));
+    base = `http://127.0.0.1:${server.address().port}`;
+  });
+
+  after(async () => {
+    events.close();
+    server.close();
+    await fs.rm(configDir, { recursive: true, force: true });
+  });
+
+  async function nextMessage(reader) {
+    const decoder = new TextDecoder();
+    let text = '';
+    while (!text.includes('data:')) text += decoder.decode((await reader.read()).value);
+    return text;
+  }
+
+  it('tells open pages when groups are saved', async () => {
+    const res = await fetch(`${base}/api/events`);
+    assert.equal(res.headers.get('content-type'), 'text/event-stream');
+    const reader = res.body.getReader();
+    const saved = await fetch(`${base}/api/groups`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ groups: [{ name: 'Apps' }] }),
+    });
+    assert.equal(saved.status, 200);
+    assert.match(await nextMessage(reader), /data: change/);
+    await reader.cancel();
+  });
+});
+
 describe('createRouteStore health checks', () => {
   const HOUR = 60 * 60 * 1000;
   let clock;
@@ -265,6 +310,17 @@ describe('createRouteStore health checks', () => {
     await store.refresh();
     assert.equal(await store.refreshHealth(), false);
     assert.deepEqual(Object.keys(store.getHealth()), ['a@docker']);
+  });
+
+  it('reports whether the routes or the error changed', async () => {
+    const store = makeStore();
+    assert.equal(await store.refresh(), true);
+    assert.equal(await store.refresh(), false);
+    routers = routers.slice(1);
+    assert.equal(await store.refresh(), true);
+    const failing = makeStore({ fetchImpl: async () => { throw new Error('down'); } });
+    assert.equal(await failing.refresh(), true);
+    assert.equal(await failing.refresh(), false);
   });
 
   it('reports nothing to save when no route was due', async () => {
