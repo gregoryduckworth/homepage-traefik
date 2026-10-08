@@ -101,7 +101,7 @@ Each route shows an icon beside its name. Once a route's health check succeeds, 
 
 The icons found are saved, base64-encoded, in `icons.json` beside `CONFIG_FILE`, so after a restart the page shows them straight away instead of looking every site up again. It's only a cache: deleting it just means the icons are looked up again. It's in the same folder as `homepage.json`, so mounting that folder keeps both when the container is recreated, for example to upgrade it (see [Keeping your settings with your Compose project](#keeping-your-settings-with-your-compose-project)).
 
-- Redirects to another host aren't followed, because that's usually a login page whose icon would belong to your sign-in provider. A route behind authentication may get no icon, or its login page's icon if that's on the same host.
+- Redirects to another host aren't followed (apart from between a domain and its `www.` name, such as `example.com` to `www.example.com`), because that's usually a login page whose icon would belong to your sign-in provider. A route behind authentication may get no icon, or its login page's icon if that's on the same host.
 - Certificates aren't checked when fetching icons, so routes with self-signed certificates still get one. Only images (PNG, ICO, GIF, JPEG, WebP or SVG, up to 256 KB) are used.
 - A route with no icon shows the first letter of its name.
 

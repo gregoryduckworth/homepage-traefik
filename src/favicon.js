@@ -19,9 +19,16 @@ function httpError(status) {
   return Object.assign(new Error(`HTTP ${status}`), { status });
 }
 
-// Fetches a URL into a buffer, following redirects on the same host only: a redirect to another host is usually a
-// login page, whose icon belongs to the login provider. Certificates aren't verified, because self-signed ones are
-// common on home labs and the result is only a picture; the server sends it with headers that stop it running script.
+// Whether two hostnames are the same site, counting example.com and www.example.com as one.
+function sameSite(a, b) {
+  const bare = host => host.toLowerCase().replace(/^www\./, '');
+  return bare(a) === bare(b);
+}
+
+// Fetches a URL into a buffer, following redirects on the same host only (or between it and its www. name): a
+// redirect to another host is usually a login page, whose icon belongs to the login provider. Certificates aren't
+// verified, because self-signed ones are common on home labs and the result is only a picture; the server sends it
+// with headers that stop it running script.
 // With `truncate`, a body over `maxBytes` is cut short rather than refused, which is enough to read a page's <head>.
 function get(url, { timeoutMs, lookup, maxBytes, truncate = false, redirects = MAX_REDIRECTS }) {
   return new Promise((resolve, reject) => {
@@ -45,7 +52,7 @@ function get(url, { timeoutMs, lookup, maxBytes, truncate = false, redirects = M
       if (res.statusCode >= 300 && res.statusCode < 400 && location) {
         req.destroy();
         const next = new URL(location, target);
-        if (!redirects || next.hostname !== target.hostname || !/^https?:$/.test(next.protocol)) {
+        if (!redirects || !sameSite(next.hostname, target.hostname) || !/^https?:$/.test(next.protocol)) {
           settle(reject, httpError(res.statusCode));
         } else {
           settle(resolve, get(next.href, { timeoutMs, lookup, maxBytes, truncate, redirects: redirects - 1 }));
