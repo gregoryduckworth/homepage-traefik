@@ -1,6 +1,6 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
-const { parseRule, normalizeRouter, normalizeRouters, fetchRouters } = require('../src/traefik');
+const { parseRule, parseEntryPointPorts, normalizeRouter, normalizeRouters, fetchRouters } = require('../src/traefik');
 
 describe('parseRule', () => {
   it('extracts host and path prefix', () => {
@@ -83,6 +83,54 @@ describe('normalizeRouter', () => {
     const route = normalizeRouter({ name: 'metrics@file', rule: 'PathPrefix(`/metrics`)' });
     assert.equal(route.url, null);
     assert.equal(route.status, 'unknown');
+  });
+});
+
+describe('parseEntryPointPorts', () => {
+  it('reads entry point names and ports, ignoring spaces and empty entries', () => {
+    const { ports, invalid } = parseEntryPointPorts(' websecure:8443, web : 8080,, ');
+    assert.deepEqual([...ports], [['websecure', 8443], ['web', 8080]]);
+    assert.deepEqual(invalid, []);
+  });
+
+  it('reports entries without a valid port', () => {
+    const { ports, invalid } = parseEntryPointPorts('websecure=8443,web:0,api:70000,admin:x,lan:9000');
+    assert.deepEqual([...ports], [['lan', 9000]]);
+    assert.deepEqual(invalid, ['websecure=8443', 'web:0', 'api:70000', 'admin:x']);
+  });
+
+  it('is empty when the setting is unset', () => {
+    assert.equal(parseEntryPointPorts(undefined).ports.size, 0);
+  });
+});
+
+describe('normalizeRouter with entry point ports', () => {
+  const ports = new Map([['websecure', 8443], ['web', 80], ['lan', 8080]]);
+
+  it('adds the entry point port to the URL', () => {
+    const route = normalizeRouter({ name: 'app', rule: 'Host(`app.test`) && PathPrefix(`/ui`)', entryPoints: ['websecure'], tls: {} }, { ports });
+    assert.equal(route.port, 8443);
+    assert.equal(route.url, 'https://app.test:8443/ui');
+  });
+
+  it('leaves out the default port for the scheme', () => {
+    const route = normalizeRouter({ name: 'app', rule: 'Host(`app.test`)', entryPoints: ['web'] }, { ports });
+    assert.equal(route.port, null);
+    assert.equal(route.url, 'http://app.test');
+  });
+
+  it('uses the first entry point that has a port', () => {
+    const route = normalizeRouter({ name: 'app', rule: 'Host(`app.test`)', entryPoints: ['other', 'lan', 'websecure'] }, { ports });
+    assert.equal(route.url, 'http://app.test:8080');
+  });
+
+  it('has no port for a route without a host', () => {
+    assert.equal(normalizeRouter({ name: 'm', rule: 'PathPrefix(`/m`)', entryPoints: ['lan'] }, { ports }).port, null);
+  });
+
+  it('is passed through by normalizeRouters', () => {
+    const [route] = normalizeRouters([{ name: 'app', rule: 'Host(`app.test`)', entryPoints: ['websecure'], tls: {} }], { ports });
+    assert.equal(route.url, 'https://app.test:8443');
   });
 });
 
