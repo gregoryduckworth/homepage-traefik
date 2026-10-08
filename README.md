@@ -128,6 +128,25 @@ These are saved in the same file as your groups (see below), under `routes`, key
 
 Names can be up to 60 characters. Like group members, entries for routes Traefik isn't serving right now stay in the file.
 
+## Links to other sites
+
+To list a site that isn't behind Traefik, such as your router's admin page or a NAS, select **Add link** and give it a name and an address (and, if you like, an icon address). Links are listed in a **Links** group, and you can drag them into your own groups like any route. They get the same health checks and icon lookups as routes, and are listed even while Traefik can't be reached. To change or delete a link, open its details panel and select **Edit link**.
+
+Links are saved in the same file as your groups, under `links`. In `groups`, a link is referred to as `link:` followed by its name:
+
+```json
+{
+  "links": [
+    { "name": "Router", "url": "http://192.168.1.1" },
+    { "name": "NAS", "url": "https://nas.lan:5001", "icon": "https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/svg/synology.svg" }
+  ],
+  "groups": [{ "name": "Network", "routes": ["link:Router", "link:NAS"] }]
+}
+```
+
+- Names can be up to 60 characters, and each link needs its own name (ignoring case). Renaming a link on the page also renames it in its group.
+- There can be up to 100 links.
+
 ## Groups
 
 By default routes are grouped by entrypoint. To make your own groups, select **New group**, name it, then drag routes onto it. Dropping a route on another route in a group puts it in front of that one, so you can also reorder routes this way. To take a route out of its group, drag it onto an entrypoint group or onto the box that appears at the bottom of the page while you drag. To reorder your groups, drag a group by its heading above or below another group, or use the up and down arrows on its heading. Each group heading also has buttons to rename or delete it. Deleting a group sends its routes back to their entrypoint groups.
@@ -173,7 +192,7 @@ Mounting `homepage.json` on its own (`./homepage.json:/app/config/homepage.json`
 
 ## API
 
-The server also exposes `GET /api/routes` (the normalized route list, your groups and any config file error as JSON; each route has its saved name and icon under `custom` and the path of its found icon under `icon`), `PUT /api/groups` (replaces the groups; send `{"groups": [...]}` as `application/json`), `PUT /api/routes/<router name>` (sets a route's name, icon and whether it's hidden; send any of `{"name": "...", "icon": "...", "hidden": true}`, with empty values or `false` to clear them; fields you leave out keep their saved values), `GET /api/icons/<router name>`, `GET /api/events` (a server-sent event stream that sends a message when routes, health checks, icons or saved settings change) and `GET /healthz`.
+The server also exposes `GET /api/routes` (the normalized route list, your groups and any config file error as JSON; each route has its saved name and icon under `custom` and the path of its found icon under `icon`), `PUT /api/groups` (replaces the groups; send `{"groups": [...]}` as `application/json`), `PUT /api/routes/<router name>` (sets a route's name, icon and whether it's hidden; send any of `{"name": "...", "icon": "...", "hidden": true}`, with empty values or `false` to clear them; fields you leave out keep their saved values), `PUT /api/links/<link name>` (adds the link, or changes the one with that name; send `{"name": "...", "url": "...", "icon": "..."}`), `DELETE /api/links/<link name>`, `GET /api/icons/<router name>`, `GET /api/events` (a server-sent event stream that sends a message when routes, health checks, icons or saved settings change) and `GET /healthz`.
 
 ## Development
 

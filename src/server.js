@@ -3,7 +3,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { fetchRouters, normalizeRouters, parseEntryPointPorts } = require('./traefik');
 const { checkAllRoutes, isCheckable } = require('./healthcheck');
-const { ConfigError, storedHealth, createConfigStore } = require('./config');
+const { ConfigError, linkId, storedHealth, createConfigStore } = require('./config');
 const { createIconStore, parseSavedIcons } = require('./favicon');
 const { createEvents } = require('./events');
 const { writeSafely } = require('./files');
@@ -25,6 +25,31 @@ const MAX_BODY_BYTES = 64 * 1024;
 // ago can look a moment too young. Without some slack it would wait a whole extra tick.
 const DUE_SLACK_MS = 2000;
 
+// A link from the config file, shaped like a route so it's listed, grouped and checked the same way.
+function linkRoute(link) {
+  const url = new URL(link.url);
+  return {
+    id: linkId(link.name),
+    protocol: 'link',
+    name: link.name,
+    provider: 'link',
+    status: 'enabled',
+    rule: '',
+    service: null,
+    entryPoints: [],
+    middlewares: [],
+    priority: null,
+    errors: [],
+    tls: url.protocol === 'https:',
+    certResolver: null,
+    host: url.hostname,
+    port: url.port ? Number(url.port) : null,
+    path: `${url.pathname === '/' ? '' : url.pathname}${url.search}`,
+    url: link.url,
+    link,
+  };
+}
+
 function createRouteStore({
   traefikUrl,
   fetchImpl,
@@ -36,6 +61,9 @@ function createRouteStore({
   now = Date.now,
 }) {
   const state = { routes: [], updatedAt: null, error: null };
+  // Routes from Traefik and links from the config file, kept apart so either can change without the other.
+  let traefikRoutes = [];
+  let linkRoutes = [];
   // Keyed by route id. Each result records the URL it checked, so a route whose URL changes is checked again.
   let healthResults = new Map(health);
 
@@ -47,7 +75,8 @@ function createRouteStore({
         fetchRouters(traefikUrl, { fetchImpl }),
         fetchRouters(traefikUrl, { fetchImpl, protocol: 'tcp' }),
       ]);
-      state.routes = normalizeRouters(httpRouters, { ports: entryPointPorts, tcpRouters });
+      traefikRoutes = normalizeRouters(httpRouters, { ports: entryPointPorts, tcpRouters });
+      state.routes = [...traefikRoutes, ...linkRoutes];
       state.updatedAt = new Date().toISOString();
       state.error = null;
     } catch (err) {
@@ -61,6 +90,14 @@ function createRouteStore({
       console.error(`Route refresh failed: ${state.error}`);
     }
     return JSON.stringify([state.routes, state.error]) !== before;
+  }
+
+  // Resolves to whether the links changed. They're listed even while Traefik can't be reached.
+  function setLinks(links) {
+    const before = JSON.stringify(linkRoutes);
+    linkRoutes = links.map(linkRoute);
+    state.routes = [...traefikRoutes, ...linkRoutes];
+    return JSON.stringify(linkRoutes) !== before;
   }
 
   function isDue(route) {
@@ -101,7 +138,7 @@ function createRouteStore({
     });
   }
 
-  return { state, refresh, refreshHealth, getHealth, getRoutesWithHealth };
+  return { state, refresh, setLinks, refreshHealth, getHealth, getRoutesWithHealth };
 }
 
 function sendJson(res, status, body) {
@@ -125,15 +162,15 @@ async function readJson(req) {
   }
 }
 
-// Reads a JSON body for a PUT and replies with whatever `save` returns, or with the error. Resolves to whether
-// the change was saved.
-async function handlePut(req, res, what, save) {
-  if (req.method !== 'PUT') {
-    res.writeHead(405, { Allow: 'PUT', 'Content-Type': 'text/plain' }).end('Method not allowed');
+// Reads a JSON body for a PUT and replies with whatever `save` returns, or with the error. `remove`, when given,
+// answers a DELETE the same way, without a body. Resolves to whether the change was saved.
+async function handlePut(req, res, what, save, remove = null) {
+  if (req.method !== 'PUT' && !(remove && req.method === 'DELETE')) {
+    res.writeHead(405, { Allow: remove ? 'PUT, DELETE' : 'PUT', 'Content-Type': 'text/plain' }).end('Method not allowed');
     return false;
   }
   try {
-    sendJson(res, 200, await save(await readJson(req)));
+    sendJson(res, 200, req.method === 'DELETE' ? await remove() : await save(await readJson(req)));
     return true;
   } catch (err) {
     const status = err instanceof ConfigError ? err.status : 500;
@@ -202,6 +239,22 @@ function createServer({ store, config, title, icons = { get: () => null }, event
     if (pathname.startsWith('/api/routes/')) {
       const id = pathParam(pathname, '/api/routes/');
       if (await handlePut(req, res, 'the route', async body => ({ custom: await config.saveRoute(id, body) }))) events?.notify();
+      return;
+    }
+
+    // The links are listed straight away, rather than on the next poll; they're checked on the next poll.
+    if (pathname.startsWith('/api/links/')) {
+      const name = pathParam(pathname, '/api/links/');
+      const saved = await handlePut(req, res, 'the link',
+        async body => ({ link: await config.saveLink(name, body) }),
+        async () => {
+          if (!(await config.deleteLink(name))) throw new ConfigError(`There's no link called "${name}"`, 404);
+          return { deleted: true };
+        });
+      if (saved) {
+        store.setLinks((await config.read()).links);
+        events?.notify();
+      }
       return;
     }
 
@@ -345,7 +398,9 @@ if (require.main === module) {
       if (polling) return;
       polling = true;
       try {
-        const routesChanged = await store.refresh();
+        // Picks up links added or changed by hand in the config file.
+        const linksChanged = store.setLinks((await config.read()).links);
+        const routesChanged = (await store.refresh()) || linksChanged;
         const healthChanged = await store.refreshHealth();
         if (routesChanged || healthChanged) events.notify();
         if (healthChanged) await saveHealth();
@@ -368,4 +423,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { createServer, createRouteStore, readSeconds, readPort, readFrameAncestors };
+module.exports = { createServer, createRouteStore, linkRoute, readSeconds, readPort, readFrameAncestors };

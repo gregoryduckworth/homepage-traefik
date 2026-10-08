@@ -46,6 +46,16 @@ const els = {
   routeSubmit: $('route-submit'),
   detailsHide: $('details-hide'),
   hiddenToggle: $('hidden-toggle'),
+  detailsEdit: $('details-edit'),
+  newLink: $('new-link'),
+  linkDialog: $('link-dialog'),
+  linkForm: $('link-form'),
+  linkName: $('link-name'),
+  linkUrl: $('link-url'),
+  linkIcon: $('link-icon'),
+  linkError: $('link-error'),
+  linkSubmit: $('link-submit'),
+  linkDelete: $('link-delete'),
 };
 
 const INFO_ICON = '<svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/></svg>';
@@ -68,6 +78,7 @@ function closeOnBackdrop(dialog) {
 closeOnBackdrop(els.details);
 closeOnBackdrop(els.groupDialog);
 closeOnBackdrop(els.routeDialog);
+closeOnBackdrop(els.linkDialog);
 
 let data = { routes: [], groups: [], error: null, configError: null, updatedAt: null };
 let saveError = null;
@@ -93,6 +104,7 @@ function el(tag, className, text) {
 }
 
 function groupKey(route) {
+  if (route.protocol === 'link') return 'Links';
   return route.entryPoints.length ? route.entryPoints.join(' + ') : 'default';
 }
 
@@ -151,7 +163,7 @@ function renderIcon(route, dot) {
   const box = el('span', 'tile-icon');
   const letter = el('span', 'tile-letter', [...displayName(route)][0]?.toUpperCase() || '?');
   letter.setAttribute('aria-hidden', 'true');
-  const sources = [route.custom?.icon, route.icon].filter(Boolean);
+  const sources = [route.custom?.icon, route.link?.icon, route.icon].filter(Boolean);
   if (sources.length) {
     const img = el('img');
     img.alt = '';
@@ -245,9 +257,12 @@ function tlsText(route) {
   return route.certResolver ? `Yes, certificates from ${route.certResolver}` : 'Yes';
 }
 
+// Rows about the Traefik router, which links from the config file don't have.
+const ROUTER_ROWS = new Set(['Traefik status', 'Router', 'Rule', 'Service', 'Entry points', 'Middlewares', 'Protocol', 'TLS', 'Priority']);
+
 function detailRows(route) {
   const status = statusOf(route);
-  return [
+  const rows = [
     ['Status', status.kind === 'checking' ? 'Checking' : status.label],
     ['Health check', healthText(route)],
     ['Checked with', attemptText(route.health)],
@@ -263,7 +278,10 @@ function detailRows(route) {
     ['Protocol', route.protocol === 'tcp' ? 'TCP' : 'HTTP'],
     ['TLS', tlsText(route)],
     ['Priority', route.priority],
-  ].filter(([, value]) => value != null && value !== '');
+  ];
+  return rows
+    .filter(([term]) => route.protocol !== 'link' || !ROUTER_ROWS.has(term))
+    .filter(([, value]) => value != null && value !== '');
 }
 
 function fillDetails(route) {
@@ -286,7 +304,9 @@ function fillDetails(route) {
   els.detailsGroup.value = current ? current.name : '';
   els.detailsGroup.parentElement.hidden = !data.groups.length;
 
-  els.detailsHide.textContent = isHidden(route) ? 'Show route' : 'Hide route';
+  const noun = route.protocol === 'link' ? 'link' : 'route';
+  els.detailsHide.textContent = isHidden(route) ? `Show ${noun}` : `Hide ${noun}`;
+  els.detailsEdit.textContent = route.protocol === 'link' ? 'Edit link' : 'Change name or icon';
 
   const open = $('details-open');
   open.hidden = !route.url;
@@ -484,9 +504,10 @@ function render() {
   }
 }
 
-// Resolves to the server's reply, or throws with the reason it gives for refusing the change.
+// Resolves to the server's reply, or throws with the reason it gives for refusing the change. Without a body,
+// the request is a DELETE.
 async function putJson(url, body) {
-  const res = await fetch(url, {
+  const res = await fetch(url, body === undefined ? { method: 'DELETE' } : {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -630,7 +651,62 @@ els.routeForm.addEventListener('submit', async event => {
   }
 });
 
-$('details-edit').addEventListener('click', openRouteDialog);
+els.detailsEdit.addEventListener('click', () => {
+  const route = data.routes.find(r => r.id === detailsId);
+  if (route?.protocol === 'link') openLinkDialog(route.link);
+  else openRouteDialog();
+});
+
+// Links to sites that aren't behind Traefik. `editingLink` is the name of the link being changed, or null for a
+// new one. Like names and icons, the dialog stays open until the server has the change.
+let editingLink = null;
+
+function openLinkDialog(link = null) {
+  editingLink = link?.name ?? null;
+  $('link-dialog-title').textContent = link ? 'Edit link' : 'Add link';
+  els.linkSubmit.textContent = link ? 'Save' : 'Add link';
+  els.linkName.value = link?.name || '';
+  els.linkUrl.value = link?.url || '';
+  els.linkIcon.value = link?.icon || '';
+  els.linkDelete.hidden = !link;
+  els.linkError.hidden = true;
+  els.linkSubmit.disabled = false;
+  els.linkDialog.showModal();
+}
+
+async function changeLink(body) {
+  const name = editingLink ?? els.linkName.value.trim();
+  els.linkSubmit.disabled = els.linkDelete.disabled = true;
+  try {
+    const reply = await putJson(`api/links/${encodeURIComponent(name)}`, body);
+    // A renamed link has a new id, so the details panel follows it rather than closing.
+    if (reply.link && detailsId === `link:${editingLink}`) detailsId = `link:${reply.link.name}`;
+    els.linkDialog.close();
+    load();
+  } catch (err) {
+    els.linkError.textContent = err.message;
+    els.linkError.hidden = false;
+  } finally {
+    els.linkSubmit.disabled = els.linkDelete.disabled = false;
+  }
+}
+
+els.linkForm.addEventListener('submit', event => {
+  event.preventDefault();
+  if (!els.linkName.value.trim()) {
+    els.linkError.textContent = 'Enter a name for the link.';
+    els.linkError.hidden = false;
+    return;
+  }
+  changeLink({ name: els.linkName.value, url: els.linkUrl.value, icon: els.linkIcon.value });
+});
+
+els.linkDelete.addEventListener('click', () => {
+  if (confirm(`Delete the “${editingLink}” link?`)) changeLink(undefined);
+});
+
+els.newLink.addEventListener('click', () => openLinkDialog());
+$('link-cancel').addEventListener('click', () => els.linkDialog.close());
 
 // Only "hidden" is sent, so the route keeps its name and icon. A route that's hidden while hidden routes aren't
 // shown leaves the page, so its details close too.
