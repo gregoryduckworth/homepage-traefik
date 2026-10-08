@@ -3,6 +3,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { fetchRouters, normalizeRouters } = require('./traefik');
 const { checkAllRoutes } = require('./healthcheck');
+const { ConfigError, createConfigStore } = require('./config');
 
 const PUBLIC_DIR = path.resolve(__dirname, '..', 'public');
 
@@ -12,6 +13,8 @@ const MIME_TYPES = {
   '.js': 'text/javascript; charset=utf-8',
   '.svg': 'image/svg+xml',
 };
+
+const MAX_BODY_BYTES = 64 * 1024;
 
 function createRouteStore({ traefikUrl, fetchImpl, checkRoutes = checkAllRoutes, healthOptions = {} }) {
   const state = { routes: [], updatedAt: null, error: null };
@@ -49,18 +52,61 @@ function createRouteStore({ traefikUrl, fetchImpl, checkRoutes = checkAllRoutes,
   return { state, refresh, refreshHealth, getRoutesWithHealth };
 }
 
-function createServer({ store, title }) {
+function sendJson(res, status, body) {
+  res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+  res.end(JSON.stringify(body));
+}
+
+async function readJson(req) {
+  if (!/^application\/json\b/.test(req.headers['content-type'] || '')) throw new ConfigError('Send the request body as application/json', 415);
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > MAX_BODY_BYTES) throw new ConfigError('The request body is too large', 413);
+    chunks.push(chunk);
+  }
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+  } catch {
+    throw new ConfigError('The request body is not valid JSON');
+  }
+}
+
+async function handleGroups(req, res, config) {
+  if (req.method !== 'PUT') {
+    res.writeHead(405, { Allow: 'PUT', 'Content-Type': 'text/plain' }).end('Method not allowed');
+    return;
+  }
+  try {
+    const body = await readJson(req);
+    sendJson(res, 200, { groups: await config.saveGroups(body?.groups) });
+  } catch (err) {
+    const status = err instanceof ConfigError ? err.status : 500;
+    if (status >= 500) console.error(`Saving groups failed: ${err.message}`);
+    if (!res.headersSent) sendJson(res, status, { error: err instanceof ConfigError ? err.message : 'Saving groups failed' });
+  }
+}
+
+function createServer({ store, config, title }) {
   return http.createServer(async (req, res) => {
     const { pathname } = new URL(req.url, 'http://localhost');
 
     if (pathname === '/api/routes') {
-      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-      res.end(JSON.stringify({
+      const { groups, error: configError } = await config.read();
+      sendJson(res, 200, {
         title,
         routes: store.getRoutesWithHealth(),
+        groups,
         updatedAt: store.state.updatedAt,
         error: store.state.error,
-      }));
+        configError,
+      });
+      return;
+    }
+
+    if (pathname === '/api/groups') {
+      await handleGroups(req, res, config);
       return;
     }
 
@@ -87,6 +133,7 @@ if (require.main === module) {
   const traefikUrl = process.env.TRAEFIK_API_URL || 'http://traefik:8080';
   const pollMs = parseInt(process.env.POLL_INTERVAL_SECONDS || '30', 10) * 1000;
   const title = process.env.HOMEPAGE_TITLE || 'Routes';
+  const configFile = path.resolve(process.env.CONFIG_FILE || 'config/homepage.json');
   const timeoutSeconds = parseFloat(process.env.HEALTHCHECK_TIMEOUT_SECONDS);
   const healthOptions = {
     timeoutMs: timeoutSeconds > 0 ? timeoutSeconds * 1000 : undefined,
@@ -109,8 +156,9 @@ if (require.main === module) {
   poll();
   setInterval(poll, pollMs).unref();
 
-  const server = createServer({ store, title });
-  server.listen(port, () => console.log(`Homepage on :${port}, reading routes from ${traefikUrl}`));
+  const config = createConfigStore({ file: configFile });
+  const server = createServer({ store, config, title });
+  server.listen(port, () => console.log(`Homepage on :${port}, reading routes from ${traefikUrl}, groups from ${configFile}`));
   for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => server.close(() => process.exit(0)));
 }
 

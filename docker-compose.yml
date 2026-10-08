@@ -1,5 +1,5 @@
 # Example stack: Traefik, the homepage, and a demo service.
-# Run `docker compose up -d`, then open http://home.localhost and http://whoami.localhost.
+# Run `touch homepage.json && docker compose up -d`, then open http://home.localhost and http://whoami.localhost.
 services:
   traefik:
     image: traefik:v3.1
@@ -22,6 +22,9 @@ services:
       POLL_INTERVAL_SECONDS: 30
       # *.localhost resolves to the homepage container itself, so send health checks straight to Traefik.
       HEALTHCHECK_ADDRESS: traefik
+    volumes:
+      # Groups you create on the page are saved to this file, next to this compose file.
+      - ./homepage.json:/app/config/homepage.json
     depends_on:
       - traefik
     labels:
