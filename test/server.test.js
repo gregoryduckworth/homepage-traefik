@@ -37,6 +37,15 @@ describe('server', () => {
     assert.equal(body.routes[0].url, 'http://app.test');
   });
 
+  it('includes route health once it has been checked', async () => {
+    const before = await (await fetch(`${base}/api/routes`)).json();
+    assert.equal(before.routes[0].health, null);
+    await store.refreshHealth();
+    const after = await (await fetch(`${base}/api/routes`)).json();
+    assert.equal(after.routes[0].health.reachable, true);
+    assert.equal(after.routes[0].health.statusCode, 200);
+  });
+
   it('keeps the last good routes and reports the error when Traefik is unreachable', async () => {
     failWith = Object.assign(new Error('fetch failed'), { cause: { code: 'ECONNREFUSED' } });
     await store.refresh();

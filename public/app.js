@@ -1,20 +1,28 @@
-const LINE_COLOURS = ['#0a6cb4', '#00875a', '#c77700', '#a8327f', '#5a4fcf', '#0e7c86'];
+const GROUP_COLOURS = ['#3b82f6', '#10b981', '#f59e0b', '#a855f7', '#ec4899', '#14b8a6'];
 const REFRESH_MS = 30000;
 
+const $ = id => document.getElementById(id);
 const els = {
-  title: document.getElementById('title'),
-  summary: document.getElementById('summary'),
-  filter: document.getElementById('filter'),
-  notice: document.getElementById('notice'),
-  lines: document.getElementById('lines'),
-  empty: document.getElementById('empty'),
-  lineTemplate: document.getElementById('line-template'),
-  stationTemplate: document.getElementById('station-template'),
+  title: $('title'),
+  summary: $('summary'),
+  filter: $('filter'),
+  notice: $('notice'),
+  routes: $('routes'),
+  empty: $('empty'),
+  stats: $('stats'),
+  themeToggle: $('theme-toggle'),
 };
 
 let data = { routes: [], error: null, updatedAt: null };
 
-function lineKey(route) {
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text != null) node.textContent = text;
+  return node;
+}
+
+function groupKey(route) {
   return route.entryPoints.length ? route.entryPoints.join(' + ') : 'default';
 }
 
@@ -24,69 +32,113 @@ function matches(route, query) {
     .some(value => value && value.toLowerCase().includes(query));
 }
 
-function renderStation(route) {
-  const node = els.stationTemplate.content.firstElementChild.cloneNode(true);
-  const link = node.querySelector('.host');
-  node.dataset.status = route.status;
+// Traefik's router status wins over the probe: a disabled router can't be healthy.
+function statusOf(route) {
+  if (route.status === 'disabled') return { kind: 'disabled', label: 'Disabled' };
+  if (route.status === 'warning') return { kind: 'warning', label: 'Warning' };
+  if (!route.url) return { kind: 'unknown', label: 'No host' };
+  if (!route.health) return { kind: 'checking', label: 'Checking' };
+  if (!route.health.reachable) return { kind: 'unhealthy', label: 'Down' };
+  if (route.health.statusCode >= 500) return { kind: 'unhealthy', label: `HTTP ${route.health.statusCode}` };
+  return { kind: 'healthy', label: 'Up' };
+}
 
+function renderRoute(route) {
+  const status = statusOf(route);
+  const item = el('li');
+  const card = el('article', 'route-card');
+  card.dataset.status = route.status;
+
+  const info = el('div', 'route-info');
+  const host = el(route.url ? 'a' : 'span', 'route-host');
   if (route.url) {
-    link.href = route.url;
-    link.textContent = route.host;
-    if (route.path) {
-      const path = document.createElement('span');
-      path.className = 'path';
-      path.textContent = route.path;
-      link.append(path);
-    }
+    host.href = route.url;
+    host.target = '_blank';
+    host.rel = 'noopener noreferrer';
+    host.textContent = route.host;
+    if (route.path) host.append(el('span', 'route-path', route.path));
   } else {
-    link.removeAttribute('target');
-    link.textContent = route.name;
-    link.title = route.rule;
+    host.textContent = route.name;
+    host.title = route.rule;
   }
 
-  node.querySelector('.service').textContent = route.service ? `Service ${route.service}` : route.rule;
-  if (route.status === 'disabled') node.querySelector('.state').textContent = 'Disabled';
-  if (route.status === 'warning') node.querySelector('.state').textContent = 'Check the Traefik dashboard: this route has warnings';
-  return node;
+  const meta = el('div', 'route-meta');
+  if (route.service) meta.append(el('span', 'tag', route.service));
+  meta.append(el('span', 'tag', route.provider));
+  if (route.tls) meta.append(el('span', 'tag', 'TLS'));
+  if (!route.url) meta.append(el('span', 'tag', route.rule));
+  info.append(host, meta);
+
+  const statusWrap = el('div', 'route-status');
+  if (status.kind === 'healthy' && route.health.latencyMs != null) {
+    statusWrap.append(el('span', 'latency', `${route.health.latencyMs} ms`));
+  }
+  const badge = el('span', `status-badge status-${status.kind}`);
+  badge.append(el('span', 'dot'), document.createTextNode(status.label));
+  if (status.kind === 'warning') badge.title = 'This router has warnings in the Traefik dashboard';
+  statusWrap.append(badge);
+
+  card.append(info, statusWrap);
+  item.append(card);
+  return item;
+}
+
+function renderStats() {
+  const counts = { healthy: 0, unhealthy: 0, unknown: 0 };
+  for (const route of data.routes) {
+    const kind = statusOf(route).kind;
+    if (kind === 'healthy') counts.healthy++;
+    else if (kind === 'unhealthy' || kind === 'warning') counts.unhealthy++;
+    else counts.unknown++;
+  }
+  $('stat-total').textContent = data.routes.length;
+  $('stat-healthy').textContent = counts.healthy;
+  $('stat-unhealthy').textContent = counts.unhealthy;
+  $('stat-unknown').textContent = counts.unknown;
+  els.stats.hidden = !data.routes.length;
 }
 
 function render() {
   const query = els.filter.value.trim().toLowerCase();
   const visible = data.routes.filter(route => matches(route, query));
 
-  // Colours are assigned from the unfiltered list so a line keeps its colour while filtering.
+  // Colours come from the unfiltered list so a group keeps its colour while filtering.
   const totals = new Map();
-  for (const route of data.routes) totals.set(lineKey(route), (totals.get(lineKey(route)) || 0) + 1);
+  for (const route of data.routes) totals.set(groupKey(route), (totals.get(groupKey(route)) || 0) + 1);
   const keys = [...totals.keys()].sort((a, b) => totals.get(b) - totals.get(a) || a.localeCompare(b));
 
   const groups = new Map(keys.map(key => [key, []]));
-  for (const route of visible) groups.get(lineKey(route)).push(route);
+  for (const route of visible) groups.get(groupKey(route)).push(route);
 
   const sections = keys.flatMap((key, index) => {
     const routes = groups.get(key);
     if (!routes.length) return [];
-    const section = els.lineTemplate.content.firstElementChild.cloneNode(true);
-    section.style.setProperty('--line', LINE_COLOURS[index % LINE_COLOURS.length]);
-    section.querySelector('.line-name').textContent = key;
-    section.querySelector('.stations').append(...routes.map(renderStation));
+    const section = el('section', 'route-group');
+    const header = el('div', 'group-header');
+    const badge = el('h2', 'group-badge', key);
+    badge.style.background = GROUP_COLOURS[index % GROUP_COLOURS.length];
+    header.append(badge, el('span', 'group-count', `${routes.length} ${routes.length === 1 ? 'route' : 'routes'}`));
+    const list = el('ul', 'route-list');
+    list.append(...routes.map(renderRoute));
+    section.append(header, list);
     return [section];
   });
-  els.lines.replaceChildren(...sections);
+  els.routes.replaceChildren(...sections);
 
   if (data.error) {
-    els.notice.replaceChildren();
-    const heading = document.createElement('strong');
-    heading.textContent = data.routes.length ? 'Showing the last routes we could load' : 'No routes loaded';
-    els.notice.append(heading, document.createTextNode(data.error));
+    const heading = el('strong', null, data.routes.length ? 'Showing the last routes we could load' : 'No routes loaded');
+    els.notice.replaceChildren(heading, document.createTextNode(data.error));
   }
   els.notice.hidden = !data.error;
+
+  renderStats();
 
   const count = data.routes.length;
   if (!data.updatedAt && !data.error) {
     els.summary.textContent = 'Looking up routes…';
   } else if (data.updatedAt) {
     const time = new Date(data.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    els.summary.textContent = `${count} ${count === 1 ? 'route' : 'routes'}, updated at ${time}`;
+    els.summary.textContent = `${count} ${count === 1 ? 'route' : 'routes'} · updated ${time}`;
   } else {
     els.summary.textContent = 'Waiting for Traefik';
   }
@@ -96,7 +148,7 @@ function render() {
     els.empty.textContent = 'Traefik has no routes yet. Add a router with a Host rule, for example a traefik.http.routers.<name>.rule label on a container, and it will show up here.';
     els.empty.hidden = false;
   } else if (count && !visible.length) {
-    els.empty.textContent = `Nothing matches “${els.filter.value.trim()}”. Clear the filter to see every route.`;
+    els.empty.textContent = `Nothing matches “${els.filter.value.trim()}”. Clear the search to see every route.`;
     els.empty.hidden = false;
   }
 }
@@ -116,8 +168,21 @@ async function load() {
   render();
 }
 
+function applyTheme(theme) {
+  document.documentElement.dataset.theme = theme;
+  els.themeToggle.setAttribute('aria-pressed', String(theme === 'dark'));
+}
+
+const storedTheme = localStorage.getItem('theme');
+applyTheme(storedTheme || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'));
+els.themeToggle.addEventListener('click', () => {
+  const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+  localStorage.setItem('theme', next);
+  applyTheme(next);
+});
+
 els.filter.addEventListener('input', render);
 load();
 setInterval(load, REFRESH_MS);
-// Lines draw in once on first load; later refreshes shouldn't replay it.
+// Cards fade in on first load only; later refreshes shouldn't replay it.
 setTimeout(() => document.body.classList.add('drawn'), 1000);

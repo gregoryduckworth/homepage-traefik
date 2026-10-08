@@ -7,41 +7,59 @@
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Overpass:wght@400;600;800&display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <header class="masthead">
-    <h1 id="title">Routes</h1>
-    <p class="summary" id="summary" aria-live="polite">Looking up routes…</p>
-    <label class="filter">
-      <span class="visually-hidden">Filter routes</span>
-      <input id="filter" type="search" placeholder="Filter routes" autocomplete="off" spellcheck="false">
-    </label>
+  <header class="header">
+    <div class="header-top">
+      <div class="header-brand">
+        <svg class="logo" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+          <rect width="32" height="32" rx="8" fill="currentColor" opacity="0.1"/>
+          <path d="M8 12h16M8 16h12M8 20h8" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+        </svg>
+        <div>
+          <h1 id="title">Routes</h1>
+          <p class="subtitle" id="summary" aria-live="polite">Looking up routes&hellip;</p>
+        </div>
+      </div>
+      <div class="header-actions">
+        <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Toggle dark mode">
+          <svg class="icon-sun" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 2a1 1 0 011 1v1a1 1 0 11-2 0V3a1 1 0 011-1zm4 8a4 4 0 11-8 0 4 4 0 018 0zm-.464 4.95l.707.707a1 1 0 001.414-1.414l-.707-.707a1 1 0 00-1.414 1.414zm2.12-10.607a1 1 0 010 1.414l-.706.707a1 1 0 11-1.414-1.414l.707-.707a1 1 0 011.414 0zM17 11a1 1 0 100-2h-1a1 1 0 100 2h1zm-7 4a1 1 0 011 1v1a1 1 0 11-2 0v-1a1 1 0 011-1zM5.05 6.464A1 1 0 106.465 5.05l-.708-.707a1 1 0 00-1.414 1.414l.707.707zm1.414 8.486l-.707.707a1 1 0 01-1.414-1.414l.707-.707a1 1 0 011.414 1.414zM4 11a1 1 0 100-2H3a1 1 0 000 2h1z" clip-rule="evenodd"/></svg>
+          <svg class="icon-moon" viewBox="0 0 20 20" fill="currentColor"><path d="M17.293 13.293A8 8 0 016.707 2.707a8.001 8.001 0 1010.586 10.586z"/></svg>
+        </button>
+      </div>
+    </div>
+    <div class="search-bar">
+      <svg class="search-icon" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z" clip-rule="evenodd"/></svg>
+      <input id="filter" type="search" placeholder="Search routes..." autocomplete="off" spellcheck="false">
+    </div>
   </header>
 
-  <main>
-    <div class="notice" id="notice" role="alert" hidden></div>
-    <div id="lines"></div>
-    <p class="empty" id="empty" hidden></p>
-  </main>
+  <div class="notice" id="notice" role="alert" hidden></div>
 
-  <template id="line-template">
-    <section class="line">
-      <h2 class="line-name"></h2>
-      <ol class="stations"></ol>
-    </section>
-  </template>
+  <div class="stats" id="stats" hidden>
+    <div class="stat-card">
+      <span class="stat-value" id="stat-total">0</span>
+      <span class="stat-label">Total Routes</span>
+    </div>
+    <div class="stat-card stat-healthy">
+      <span class="stat-value" id="stat-healthy">0</span>
+      <span class="stat-label">Healthy</span>
+    </div>
+    <div class="stat-card stat-unhealthy">
+      <span class="stat-value" id="stat-unhealthy">0</span>
+      <span class="stat-label">Unhealthy</span>
+    </div>
+    <div class="stat-card stat-unknown">
+      <span class="stat-value" id="stat-unknown">0</span>
+      <span class="stat-label">Unknown</span>
+    </div>
+  </div>
 
-  <template id="station-template">
-    <li class="station">
-      <a class="host" target="_blank" rel="noopener noreferrer"></a>
-      <p class="details">
-        <span class="service"></span>
-        <span class="state"></span>
-      </p>
-    </li>
-  </template>
+  <main id="routes"></main>
+
+  <p class="empty" id="empty" hidden></p>
 
   <script src="app.js"></script>
 </body>

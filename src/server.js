@@ -2,6 +2,7 @@ const http = require('node:http');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { fetchRouters, normalizeRouters } = require('./traefik');
+const { checkAllRoutes } = require('./healthcheck');
 
 const PUBLIC_DIR = path.resolve(__dirname, '..', 'public');
 
@@ -14,6 +15,7 @@ const MIME_TYPES = {
 
 function createRouteStore({ traefikUrl, fetchImpl }) {
   const state = { routes: [], updatedAt: null, error: null };
+  let healthResults = new Map();
 
   async function refresh() {
     try {
@@ -32,7 +34,19 @@ function createRouteStore({ traefikUrl, fetchImpl }) {
     }
   }
 
-  return { state, refresh };
+  async function refreshHealth() {
+    if (!state.routes.length) return;
+    healthResults = await checkAllRoutes(state.routes, { fetchImpl });
+  }
+
+  function getRoutesWithHealth() {
+    return state.routes.map(route => {
+      const health = healthResults.get(route.id);
+      return { ...route, health: health || null };
+    });
+  }
+
+  return { state, refresh, refreshHealth, getRoutesWithHealth };
 }
 
 function createServer({ store, title }) {
@@ -41,7 +55,12 @@ function createServer({ store, title }) {
 
     if (pathname === '/api/routes') {
       res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-      res.end(JSON.stringify({ title, ...store.state }));
+      res.end(JSON.stringify({
+        title,
+        routes: store.getRoutesWithHealth(),
+        updatedAt: store.state.updatedAt,
+        error: store.state.error,
+      }));
       return;
     }
 
@@ -70,8 +89,8 @@ if (require.main === module) {
   const title = process.env.HOMEPAGE_TITLE || 'Routes';
 
   const store = createRouteStore({ traefikUrl, fetchImpl: fetch });
-  store.refresh();
-  setInterval(store.refresh, pollMs).unref();
+  store.refresh().then(() => store.refreshHealth());
+  setInterval(() => store.refresh().then(() => store.refreshHealth()), pollMs).unref();
 
   const server = createServer({ store, title });
   server.listen(port, () => console.log(`Homepage on :${port}, reading routes from ${traefikUrl}`));
