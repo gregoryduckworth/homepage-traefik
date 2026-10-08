@@ -4,3 +4,4 @@ test
 *.md
 docker-compose.yml
 config
+docs

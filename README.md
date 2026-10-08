@@ -4,6 +4,8 @@ A small homepage that lists every route Traefik is serving. It reads routers fro
 
 The app is a single Node.js process with no runtime dependencies.
 
+![The homepage listing routes in two custom groups and one entrypoint group, with a status strip across the top and one route refused](docs/screenshot.png)
+
 ## Quick start with Docker Compose
 
 ```sh
