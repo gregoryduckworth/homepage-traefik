@@ -43,6 +43,29 @@ describe('normalizeRouter', () => {
     assert.equal(route.service, 'grafana-svc');
     assert.equal(route.url, 'https://grafana.home.lan');
     assert.deepEqual(route.entryPoints, ['websecure']);
+    assert.equal(route.certResolver, 'le');
+  });
+
+  it('keeps middlewares, priority and Traefik errors for the details view', () => {
+    const route = normalizeRouter({
+      name: 'app@docker',
+      rule: 'Host(`app.test`)',
+      middlewares: ['auth@file', 'compress@docker'],
+      priority: 42,
+      error: ['the service "missing@docker" does not exist'],
+      status: 'warning',
+    });
+    assert.deepEqual(route.middlewares, ['auth@file', 'compress@docker']);
+    assert.equal(route.priority, 42);
+    assert.deepEqual(route.errors, ['the service "missing@docker" does not exist']);
+  });
+
+  it('defaults the details fields when Traefik omits them', () => {
+    const route = normalizeRouter({ name: 'bare@file', rule: 'Host(`bare.test`)' });
+    assert.deepEqual(route.middlewares, []);
+    assert.deepEqual(route.errors, []);
+    assert.equal(route.priority, null);
+    assert.equal(route.certResolver, null);
   });
 
   it('builds an http URL and keeps a non-root path', () => {

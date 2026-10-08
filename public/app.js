@@ -23,7 +23,15 @@ const els = {
   routes: $('routes'),
   empty: $('empty'),
   themeToggle: $('theme-toggle'),
+  details: $('details'),
 };
+
+const INFO_ICON = '<svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/></svg>';
+
+// Clicking the backdrop (the dialog element itself, outside its content box) closes it.
+els.details.addEventListener('click', event => {
+  if (event.target === els.details) els.details.close();
+});
 
 let data = { routes: [], error: null, updatedAt: null };
 
@@ -44,13 +52,18 @@ function matches(route, query) {
     .some(value => value && value.toLowerCase().includes(query));
 }
 
+function failureLabel(code) {
+  if (FAILURE_LABELS[code]) return FAILURE_LABELS[code];
+  return code?.startsWith('ERR_SSL') ? 'TLS error' : 'Down';
+}
+
 // Traefik's router status wins over the probe: a disabled router can't be up.
 function statusOf(route) {
   if (route.status === 'disabled') return { kind: 'off', label: 'Disabled' };
   if (route.status === 'warning') return { kind: 'warn', label: 'Warning' };
   if (!route.url) return { kind: 'off', label: 'No link' };
   if (!route.health) return { kind: 'checking', label: 'Checking' };
-  if (!route.health.reachable) return { kind: 'down', label: FAILURE_LABELS[route.health.error] || 'Down', reason: route.health.error };
+  if (!route.health.reachable) return { kind: 'down', label: failureLabel(route.health.error) };
   if (route.health.statusCode >= 500) return { kind: 'down', label: `HTTP ${route.health.statusCode}` };
   return { kind: 'up', label: 'Up' };
 }
@@ -61,14 +74,15 @@ function displayName(route) {
 
 function renderTile(route) {
   const status = statusOf(route);
-  const tile = el(route.url ? 'a' : 'div', 'tile');
+  const tile = el('div', 'tile');
   tile.dataset.kind = status.kind;
   if (route.status === 'disabled') tile.dataset.disabled = '';
-  tile.title = `${route.rule}\nProvider: ${route.provider}${status.reason ? `\nHealth check failed: ${status.reason}` : ''}`;
+
+  const link = el(route.url ? 'a' : 'span', 'tile-link');
   if (route.url) {
-    tile.href = route.url;
-    tile.target = '_blank';
-    tile.rel = 'noopener noreferrer';
+    link.href = route.url;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
   }
 
   const dot = el('span', 'dot');
@@ -86,10 +100,88 @@ function renderTile(route) {
     state.textContent = status.label;
   }
 
-  tile.append(dot, main, state);
+  link.append(dot, main, state);
+
+  const info = el('button', 'tile-info');
+  info.type = 'button';
+  info.setAttribute('aria-label', `Details for ${displayName(route)}`);
+  info.innerHTML = INFO_ICON;
+  info.addEventListener('click', () => openDetails(route.id));
+
+  tile.append(link, info);
   const item = el('li');
   item.append(tile);
   return item;
+}
+
+function timeOf(iso) {
+  return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+function healthText(route) {
+  const health = route.health;
+  if (route.status === 'disabled') return 'Not checked while the router is disabled';
+  if (!route.url) return 'Not checked: the rule has no Host to request';
+  if (!health) return 'Waiting for the first check';
+  if (!health.reachable) return `Failed with ${health.error}`;
+  return `HTTP ${health.statusCode} in ${health.latencyMs} ms`;
+}
+
+function detailRows(route) {
+  const status = statusOf(route);
+  return [
+    ['Status', status.kind === 'checking' ? 'Checking' : status.label],
+    ['Health check', healthText(route)],
+    ['Last checked', route.health?.checkedAt && timeOf(route.health.checkedAt)],
+    ['Traefik status', route.status],
+    ['Router', route.id],
+    ['Rule', route.rule, 'code'],
+    ['Service', route.service],
+    ['Entry points', route.entryPoints.join(', ')],
+    ['Middlewares', route.middlewares.length ? route.middlewares.join(', ') : 'None'],
+    ['TLS', route.tls ? (route.certResolver ? `Yes, certificates from ${route.certResolver}` : 'Yes') : 'No'],
+    ['Priority', route.priority],
+  ].filter(([, value]) => value != null && value !== '');
+}
+
+function fillDetails(route) {
+  const status = statusOf(route);
+  $('details-dot').parentElement.dataset.kind = status.kind;
+  $('details-title').textContent = displayName(route);
+
+  const errors = $('details-errors');
+  errors.replaceChildren(...route.errors.map(message => el('p', null, message)));
+  errors.hidden = !route.errors.length;
+
+  $('details-list').replaceChildren(...detailRows(route).flatMap(([term, value, format]) => {
+    const dd = el('dd');
+    dd.append(format === 'code' ? el('code', null, value) : String(value));
+    return [el('dt', null, term), dd];
+  }));
+
+  const open = $('details-open');
+  open.hidden = !route.url;
+  if (route.url) {
+    open.href = route.url;
+    open.textContent = `Open ${displayName(route)}`;
+  }
+}
+
+let detailsId = null;
+
+function openDetails(id) {
+  const route = data.routes.find(r => r.id === id);
+  if (!route) return;
+  detailsId = id;
+  fillDetails(route);
+  els.details.showModal();
+}
+
+function refreshDetails() {
+  if (!els.details.open) return;
+  const route = data.routes.find(r => r.id === detailsId);
+  if (route) fillDetails(route);
+  else els.details.close();
 }
 
 function renderStrip() {
@@ -144,6 +236,7 @@ function render() {
   els.notice.hidden = !data.error;
 
   renderStrip();
+  refreshDetails();
 
   const count = data.routes.length;
   if (!data.updatedAt && !data.error) {

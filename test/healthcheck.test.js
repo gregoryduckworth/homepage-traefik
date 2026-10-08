@@ -18,9 +18,9 @@ describe('checkHealth', () => {
 
   it('reports an unreachable route with the underlying error code', async () => {
     const fetchImpl = async () => { throw Object.assign(new Error('fetch failed'), { cause: { code: 'DEPTH_ZERO_SELF_SIGNED_CERT' } }); };
-    assert.deepEqual(await checkHealth('https://lab.test', { fetchImpl }), {
-      reachable: false, statusCode: null, latencyMs: null, error: 'DEPTH_ZERO_SELF_SIGNED_CERT',
-    });
+    const { checkedAt, ...result } = await checkHealth('https://lab.test', { fetchImpl });
+    assert.deepEqual(result, { reachable: false, statusCode: null, latencyMs: null, error: 'DEPTH_ZERO_SELF_SIGNED_CERT' });
+    assert.ok(!Number.isNaN(Date.parse(checkedAt)));
   });
 
   it('reports a timeout distinctly', async () => {
