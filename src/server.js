@@ -4,6 +4,7 @@ const path = require('node:path');
 const { fetchRouters, normalizeRouters } = require('./traefik');
 const { checkAllRoutes, isCheckable } = require('./healthcheck');
 const { ConfigError, storedHealth, createConfigStore } = require('./config');
+const { createIconStore } = require('./favicon');
 
 const PUBLIC_DIR = path.resolve(__dirname, '..', 'public');
 
@@ -112,30 +113,64 @@ async function readJson(req) {
   }
 }
 
-async function handleGroups(req, res, config) {
+// Reads a JSON body for a PUT and replies with whatever `save` returns, or with the error.
+async function handlePut(req, res, what, save) {
   if (req.method !== 'PUT') {
     res.writeHead(405, { Allow: 'PUT', 'Content-Type': 'text/plain' }).end('Method not allowed');
     return;
   }
   try {
-    const body = await readJson(req);
-    sendJson(res, 200, { groups: await config.saveGroups(body?.groups) });
+    sendJson(res, 200, await save(await readJson(req)));
   } catch (err) {
     const status = err instanceof ConfigError ? err.status : 500;
-    if (status >= 500) console.error(`Saving groups failed: ${err.message}`);
-    if (!res.headersSent) sendJson(res, status, { error: err instanceof ConfigError ? err.message : 'Saving groups failed' });
+    if (status >= 500) console.error(`Saving ${what} failed: ${err.message}`);
+    if (!res.headersSent) sendJson(res, status, { error: err instanceof ConfigError ? err.message : `Saving ${what} failed` });
   }
 }
 
-function createServer({ store, config, title }) {
+// Icons come from the routes themselves, so they're served with headers that stop an SVG running script if someone
+// opens one directly. The URL carries a hash of the icon, so browsers can cache it until it changes.
+function sendIcon(res, icon) {
+  if (!icon) {
+    res.writeHead(404, { 'Content-Type': 'text/plain' }).end('Not found');
+    return;
+  }
+  res.writeHead(200, {
+    'Content-Type': icon.type,
+    'Cache-Control': 'public, max-age=86400',
+    'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+    'X-Content-Type-Options': 'nosniff',
+  });
+  res.end(icon.body);
+}
+
+function iconPath(id, icon) {
+  return icon ? `api/icons/${encodeURIComponent(id)}?v=${icon.hash}` : null;
+}
+
+// The decoded rest of the path after a prefix, such as the router name in /api/routes/<name>. Null for a
+// malformed escape.
+function pathParam(pathname, prefix) {
+  try {
+    return decodeURIComponent(pathname.slice(prefix.length));
+  } catch {
+    return null;
+  }
+}
+
+function createServer({ store, config, title, icons = { get: () => null } }) {
   return http.createServer(async (req, res) => {
     const { pathname } = new URL(req.url, 'http://localhost');
 
     if (pathname === '/api/routes') {
-      const { groups, error: configError } = await config.read();
+      const { groups, routes: settings, error: configError } = await config.read();
       sendJson(res, 200, {
         title,
-        routes: store.getRoutesWithHealth(),
+        routes: store.getRoutesWithHealth().map(route => ({
+          ...route,
+          custom: settings[route.id] || null,
+          icon: iconPath(route.id, icons.get(route.id)),
+        })),
         groups,
         updatedAt: store.state.updatedAt,
         error: store.state.error,
@@ -144,8 +179,19 @@ function createServer({ store, config, title }) {
       return;
     }
 
+    if (pathname.startsWith('/api/routes/')) {
+      const id = pathParam(pathname, '/api/routes/');
+      await handlePut(req, res, 'the route', async body => ({ custom: await config.saveRoute(id, body) }));
+      return;
+    }
+
     if (pathname === '/api/groups') {
-      await handleGroups(req, res, config);
+      await handlePut(req, res, 'groups', async body => ({ groups: await config.saveGroups(body?.groups) }));
+      return;
+    }
+
+    if (pathname.startsWith('/api/icons/')) {
+      sendIcon(res, icons.get(pathParam(pathname, '/api/icons/')));
       return;
     }
 
@@ -211,7 +257,15 @@ if (require.main === module) {
     }
   };
 
-  // Skip a tick if the previous cycle is still running, so a slow probe can't overwrite newer results.
+  // Icons are looked up even for routes with one set in the config file, so the page can fall back to the
+  // site's own icon if that one doesn't load.
+  const icons = createIconStore({ options: healthOptions });
+  const refreshIcons = () => icons.refresh(store.getRoutesWithHealth()).catch(err => {
+    console.error(`Looking up route icons failed: ${err.message}`);
+  });
+
+  // Skip a tick if the previous cycle is still running, so a slow probe can't overwrite newer results. Icons are
+  // looked up in the background, so a slow site can't hold up the next poll.
   let polling = false;
   const poll = async () => {
     if (polling) return;
@@ -219,6 +273,7 @@ if (require.main === module) {
     try {
       await store.refresh();
       if (await store.refreshHealth()) await saveHealth();
+      refreshIcons();
     } finally {
       polling = false;
     }
@@ -226,7 +281,7 @@ if (require.main === module) {
 
   config.read().then(({ doc }) => {
     store = createRouteStore({ traefikUrl, fetchImpl: fetch, healthOptions, healthIntervalMs: healthSeconds * 1000, health: storedHealth(doc) });
-    const server = createServer({ store, config, title });
+    const server = createServer({ store, config, title, icons });
     server.listen(port, () => console.log(`Homepage on :${port}, reading routes from ${traefikUrl} every ${pollSeconds}s, checking each route every ${healthSeconds}s, groups from ${configFile}`));
     for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => server.close(() => process.exit(0)));
     poll();

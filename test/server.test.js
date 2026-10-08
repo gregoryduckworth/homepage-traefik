@@ -29,7 +29,8 @@ describe('server', () => {
     store = createRouteStore({ traefikUrl: 'http://traefik:8080', fetchImpl, checkRoutes });
     traefikRouters = [{ name: 'app@docker', rule: 'Host(`app.test`)', status: 'enabled' }];
     await store.refresh();
-    server = createServer({ store, config, title: 'My lab' });
+    const icons = { get: id => (id === 'app@docker' ? { type: 'image/svg+xml', body: Buffer.from('<svg></svg>'), hash: 'abc123' } : null) };
+    server = createServer({ store, config, title: 'My lab', icons });
     await new Promise(resolve => server.listen(0, resolve));
     base = `http://127.0.0.1:${server.address().port}`;
   });
@@ -114,6 +115,46 @@ describe('server', () => {
     const res = await fetch(`${base}/api/groups`, { method: 'POST' });
     assert.equal(res.status, 405);
     assert.equal(res.headers.get('allow'), 'PUT');
+  });
+
+  function putRoute(id, body) {
+    return fetch(`${base}/api/routes/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  }
+
+  it('saves the name and icon of a route and returns them with the route', async () => {
+    const saved = await putRoute('app@docker', { name: 'My app', icon: 'https://cdn.test/app.png' });
+    assert.deepEqual(await saved.json(), { custom: { name: 'My app', icon: 'https://cdn.test/app.png' } });
+    const body = await (await fetch(`${base}/api/routes`)).json();
+    assert.deepEqual(body.routes[0].custom, { name: 'My app', icon: 'https://cdn.test/app.png' });
+  });
+
+  it('rejects an invalid route icon with a reason', async () => {
+    const res = await putRoute('app@docker', { icon: 'not a url' });
+    assert.equal(res.status, 400);
+    assert.match((await res.json()).error, /must be the http:\/\/ or https:\/\/ address/);
+  });
+
+  it('links each route to the icon found for it, versioned by its hash', async () => {
+    const body = await (await fetch(`${base}/api/routes`)).json();
+    assert.equal(body.routes[0].icon, 'api/icons/app%40docker?v=abc123');
+  });
+
+  it('serves a found icon with headers that keep it from running script', async () => {
+    const res = await fetch(`${base}/api/icons/app%40docker?v=abc123`);
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get('content-type'), 'image/svg+xml');
+    assert.match(res.headers.get('content-security-policy'), /sandbox/);
+    assert.equal(res.headers.get('x-content-type-options'), 'nosniff');
+    assert.equal(await res.text(), '<svg></svg>');
+  });
+
+  it('returns 404 for a route with no icon', async () => {
+    const res = await fetch(`${base}/api/icons/other%40docker`);
+    assert.equal(res.status, 404);
   });
 
   it('serves the dashboard page', async () => {

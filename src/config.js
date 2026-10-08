@@ -3,6 +3,8 @@ const path = require('node:path');
 
 const MAX_GROUPS = 100;
 const MAX_NAME_LENGTH = 60;
+const MAX_ROUTE_SETTINGS = 1000;
+const MAX_ICON_LENGTH = 2048;
 // Errors that mean the file can't be replaced, though it may still be writable: a file bind-mounted on its own
 // (rename gives EBUSY, EXDEV or EPERM) or a directory the container can't write to (EACCES, EPERM or EROFS).
 const CANNOT_REPLACE = new Set(['EBUSY', 'EXDEV', 'EPERM', 'EACCES', 'EROFS']);
@@ -40,6 +42,35 @@ function normalizeGroups(input) {
   });
 }
 
+// A route's own name and icon, both optional. Returns null when neither is set, so the entry can be dropped.
+// `label` names the route mid-sentence in error messages.
+function normalizeRouteSetting(input, label = 'the route') {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new ConfigError(`Settings for ${label} must be an object with "name" and "icon"`);
+  const field = key => {
+    const value = input[key] ?? '';
+    if (typeof value !== 'string') throw new ConfigError(`"${key}" for ${label} must be text`);
+    return value.trim();
+  };
+  const name = field('name');
+  const icon = field('icon');
+  if (name.length > MAX_NAME_LENGTH) throw new ConfigError(`Route names can be at most ${MAX_NAME_LENGTH} characters`);
+  if (icon && (!/^https?:\/\/./i.test(icon) || !URL.canParse(icon) || icon.length > MAX_ICON_LENGTH)) {
+    throw new ConfigError(`The icon for ${label} must be the http:// or https:// address of an image`);
+  }
+  if (!name && !icon) return null;
+  return { ...(name && { name }), ...(icon && { icon }) };
+}
+
+// Keyed by Traefik router name. Entries for routers Traefik isn't serving are kept, like group members.
+function normalizeRouteSettings(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new ConfigError('"routes" must be an object keyed by router name');
+  const entries = Object.entries(input);
+  if (entries.length > MAX_ROUTE_SETTINGS) throw new ConfigError(`There can be at most ${MAX_ROUTE_SETTINGS} entries in "routes"`);
+  return Object.fromEntries(entries
+    .map(([id, setting]) => [id, normalizeRouteSetting(setting, `route "${id}"`)])
+    .filter(([, setting]) => setting));
+}
+
 // Saved health results are only a cache, so entries that don't look like one are dropped rather than reported.
 function storedHealth(doc) {
   const entries = doc?.health && typeof doc.health === 'object' && !Array.isArray(doc.health) ? Object.entries(doc.health) : [];
@@ -48,15 +79,15 @@ function storedHealth(doc) {
 
 function parseConfig(text) {
   // An empty file (say, one just created with touch so it can be mounted) means no groups yet.
-  if (!text.trim()) return { doc: {}, groups: [] };
+  if (!text.trim()) return { doc: {}, groups: [], routes: {} };
   const doc = JSON.parse(text);
   if (!doc || typeof doc !== 'object' || Array.isArray(doc)) throw new ConfigError('expected a JSON object with a "groups" list');
-  return { doc, groups: normalizeGroups(doc.groups ?? []) };
+  return { doc, groups: normalizeGroups(doc.groups ?? []), routes: normalizeRouteSettings(doc.routes ?? {}) };
 }
 
 // The file is re-read whenever it changes on disk, so hand edits show up without a restart.
 function createConfigStore({ file }) {
-  const empty = { version: null, doc: {}, groups: [], error: null };
+  const empty = { version: null, doc: {}, groups: [], routes: {}, error: null };
   let cache = empty;
   let writing = Promise.resolve();
 
@@ -128,8 +159,34 @@ function createConfigStore({ file }) {
       // Cache what was written rather than re-reading it: two saves of the same size within the file system's
       // timestamp resolution would otherwise look unchanged and return the earlier groups.
       const stat = await fs.stat(file);
-      cache = { version: `${stat.mtimeMs}:${stat.size}`, doc, groups, error: null };
+      cache = { ...current, version: `${stat.mtimeMs}:${stat.size}`, doc, groups, error: null };
       return groups;
+    });
+    writing = run.catch(() => {});
+    return run;
+  }
+
+  // Sets or clears one route's name and icon. Returns the saved setting, or null when both were cleared.
+  async function saveRoute(id, input) {
+    if (typeof id !== 'string' || !id) throw new ConfigError('Give the router name of the route to change');
+    const setting = normalizeRouteSetting(input);
+    const run = writing.then(async () => {
+      const current = await read();
+      if (current.error) throw new ConfigError(`${current.error}. Fix the file before changing routes here.`, 409);
+      // fromEntries defines own keys, so even a router named __proto__ is stored as a plain entry.
+      const others = Object.entries(current.routes).filter(([key]) => key !== id);
+      const routes = Object.fromEntries(setting ? [...others, [id, setting]] : others);
+      if (Object.keys(routes).length > MAX_ROUTE_SETTINGS) throw new ConfigError(`There can be at most ${MAX_ROUTE_SETTINGS} entries in "routes"`);
+      const { routes: _routes, ...rest } = current.doc;
+      const doc = Object.keys(routes).length ? { ...current.doc, routes } : rest;
+      try {
+        await write(`${JSON.stringify(doc, null, 2)}\n`);
+      } catch (err) {
+        throw new ConfigError(`Can't write ${file} (${err.code || err.message}). Check that the container's node user (UID 1000) can write to it.`, 500);
+      }
+      const stat = await fs.stat(file);
+      cache = { ...current, version: `${stat.mtimeMs}:${stat.size}`, doc, routes, error: null };
+      return setting;
     });
     writing = run.catch(() => {});
     return run;
@@ -151,7 +208,7 @@ function createConfigStore({ file }) {
     return run;
   }
 
-  return { file, read, saveGroups, saveHealth };
+  return { file, read, saveGroups, saveRoute, saveHealth };
 }
 
-module.exports = { ConfigError, normalizeGroups, storedHealth, createConfigStore };
+module.exports = { ConfigError, normalizeGroups, normalizeRouteSettings, storedHealth, createConfigStore };

@@ -154,4 +154,4 @@ async function checkAllRoutes(routes, { concurrency = DEFAULT_CONCURRENCY, ...op
   return new Map(probed.map(route => [route.id, results.get(route.id)]));
 }
 
-module.exports = { checkHealth, checkAllRoutes, describeFailure, isCheckable };
+module.exports = { checkHealth, checkAllRoutes, describeFailure, isCheckable, pinnedLookup };
