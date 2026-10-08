@@ -739,8 +739,28 @@ els.themeToggle.addEventListener('click', () => {
   applyTheme(next);
 });
 
+// The server says when something on the page has changed, such as a new icon or health check, so it shows up
+// straight away. The poll stays as a fallback for when the messages don't get through. A tab in the background
+// stops listening, which also keeps it from holding one of the browser's few connections to the server, and
+// catches up as soon as it's shown again.
+let changes = null;
+
+function listen() {
+  if (changes || document.hidden || !window.EventSource) return;
+  changes = new EventSource('api/events');
+  changes.addEventListener('message', load);
+}
+
 els.filter.addEventListener('input', render);
 load();
-// A tab in the background doesn't need fresh routes; it catches up as soon as it's shown again.
+listen();
 setInterval(() => { if (!document.hidden) load(); }, REFRESH_MS);
-document.addEventListener('visibilitychange', () => { if (!document.hidden) load(); });
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    changes?.close();
+    changes = null;
+  } else {
+    listen();
+    load();
+  }
+});
