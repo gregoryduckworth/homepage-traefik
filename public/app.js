@@ -28,9 +28,12 @@ const els = {
 
 const INFO_ICON = '<svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/></svg>';
 
-// Clicking the backdrop (the dialog element itself, outside its content box) closes it.
+// Backdrop clicks also target the dialog, as do clicks in its children's margins, so close only when outside its box.
 els.details.addEventListener('click', event => {
-  if (event.target === els.details) els.details.close();
+  if (event.target !== els.details) return;
+  const box = els.details.getBoundingClientRect();
+  const inside = event.clientX >= box.left && event.clientX <= box.right && event.clientY >= box.top && event.clientY <= box.bottom;
+  if (!inside) els.details.close();
 });
 
 let data = { routes: [], error: null, updatedAt: null };
