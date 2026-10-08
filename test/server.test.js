@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const { createServer, createRouteStore, readSeconds } = require('../src/server');
+const { createServer, createRouteStore, readSeconds, readPort, readFrameAncestors } = require('../src/server');
 const { createConfigStore } = require('../src/config');
 const { createEvents } = require('../src/events');
 
@@ -168,6 +168,14 @@ describe('server', () => {
     const res = await fetch(`${base}/fonts/atkinson-hyperlegible-latin-400-normal.woff2`);
     assert.equal(res.status, 200);
     assert.equal(res.headers.get('content-type'), 'font/woff2');
+  });
+
+  it('stops other sites framing the page and browsers guessing types', async () => {
+    for (const url of ['/', '/api/routes', '/missing']) {
+      const res = await fetch(`${base}${url}`);
+      assert.equal(res.headers.get('content-security-policy'), "frame-ancestors 'self'", url);
+      assert.equal(res.headers.get('x-content-type-options'), 'nosniff', url);
+    }
   });
 
   it('does not serve files outside the public directory', async () => {
@@ -362,4 +370,47 @@ describe('readSeconds', () => {
       assert.equal(readSeconds(env, 'POLL', opts), expected);
     });
   }
+});
+
+describe('readPort', () => {
+  const cases = [
+    ['uses the default when unset', {}, 3000],
+    ['uses the default when empty', { PORT: ' ' }, 3000],
+    ['uses the default when not a number', { PORT: 'http' }, 3000],
+    ['uses the default for a fraction', { PORT: '80.5' }, 3000],
+    ['uses the default when out of range', { PORT: '70000' }, 3000],
+    ['uses the default for zero', { PORT: '0' }, 3000],
+    ['accepts a port number', { PORT: '8080' }, 8080],
+  ];
+  for (const [name, env, expected] of cases) {
+    it(name, t => {
+      t.mock.method(console, 'warn', () => {});
+      assert.equal(readPort(env), expected);
+    });
+  }
+});
+
+describe('readFrameAncestors', () => {
+  const cases = [
+    ['allows only the homepage when unset', {}, "'self'"],
+    ['passes a list of sites through', { FRAME_ANCESTORS: " 'self' https://dash.test " }, "'self' https://dash.test"],
+    ['refuses a value that would end the directive', { FRAME_ANCESTORS: "*; script-src *" }, "'self'"],
+  ];
+  for (const [name, env, expected] of cases) {
+    it(name, t => {
+      t.mock.method(console, 'warn', () => {});
+      assert.equal(readFrameAncestors(env), expected);
+    });
+  }
+
+  it('is used by the server', async () => {
+    const server = createServer({ store: createRouteStore({ traefikUrl: 'http://traefik:8080', fetchImpl: async () => jsonResponse([]) }), config: {}, title: 't', frameAncestors: '*' });
+    await new Promise(resolve => server.listen(0, resolve));
+    try {
+      const res = await fetch(`http://127.0.0.1:${server.address().port}/healthz`);
+      assert.equal(res.headers.get('content-security-policy'), 'frame-ancestors *');
+    } finally {
+      server.close();
+    }
+  });
 });
