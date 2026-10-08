@@ -1,0 +1,115 @@
+const { test, expect } = require('./fixtures');
+
+// A group's section, found by its heading ("web (2)", "Media (0)"), whatever its count.
+function group(page, name) {
+  return page.locator('section').filter({ has: page.getByRole('heading', { level: 2, name: new RegExp(`^${name} \\(`) }) });
+}
+
+// A route's info button, in the whole page or in one group's section.
+function details(scope, name) {
+  return scope.getByRole('button', { name: `Details for ${name}` });
+}
+
+async function createGroup(page, name) {
+  await page.getByRole('button', { name: 'New group' }).click();
+  await page.getByRole('dialog', { name: 'New group' }).getByLabel('Name').fill(name);
+  await page.getByRole('button', { name: 'Create group' }).click();
+  await expect(group(page, name)).toBeVisible();
+}
+
+test.beforeEach(async ({ page, homepage }) => {
+  await page.goto(homepage.url);
+  await expect(details(page, 'grafana')).toBeVisible();
+});
+
+test('lists routes by entry point, named after their routers, without Traefik\'s own', async ({ page }) => {
+  await expect(page.getByRole('heading', { level: 2 })).toHaveText(['web (2)', 'websecure (1)']);
+  await expect(group(page, 'web').getByRole('button', { name: /^Details for / })).toHaveCount(2);
+  await expect(page.getByRole('link', { name: /sonarr/ })).toHaveAttribute('href', 'https://sonarr.test');
+  await expect(details(page, 'api')).toHaveCount(0);
+});
+
+test('search narrows the list and says when nothing matches', async ({ page }) => {
+  const search = page.getByRole('searchbox', { name: 'Search routes' });
+  await search.fill('jelly');
+  await expect(page.getByRole('button', { name: /^Details for / })).toHaveCount(1);
+  await expect(details(page, 'jellyfin')).toBeVisible();
+
+  await search.fill('nothing');
+  await expect(page.getByText('Nothing matches “nothing”')).toBeVisible();
+});
+
+test('a route moved into a new group from its details stays there after a reload', async ({ page, homepage }) => {
+  await createGroup(page, 'Media');
+  await details(page, 'jellyfin').click();
+  const dialog = page.getByRole('dialog', { name: 'jellyfin' });
+  await dialog.getByLabel('Group').selectOption('Media');
+  await dialog.getByRole('button', { name: 'Close' }).click();
+
+  await expect(details(group(page, 'Media'), 'jellyfin')).toBeVisible();
+  await expect.poll(async () => (await homepage.readConfig()).groups).toEqual([{ name: 'Media', routes: ['jellyfin@docker'] }]);
+
+  await page.reload();
+  await expect(details(group(page, 'Media'), 'jellyfin')).toBeVisible();
+  await expect(group(page, 'web').getByRole('heading')).toHaveText('web (1)');
+});
+
+test('a route dragged onto a group joins it', async ({ page, homepage }) => {
+  await createGroup(page, 'Monitoring');
+  const tile = page.getByRole('listitem').filter({ has: details(page, 'grafana') });
+  await tile.dragTo(group(page, 'Monitoring'));
+
+  await expect(details(group(page, 'Monitoring'), 'grafana')).toBeVisible();
+  await expect.poll(async () => (await homepage.readConfig()).groups).toEqual([{ name: 'Monitoring', routes: ['grafana@docker'] }]);
+});
+
+test('groups can be reordered with their arrow buttons', async ({ page }) => {
+  await createGroup(page, 'First');
+  await createGroup(page, 'Second');
+  await page.getByRole('button', { name: 'Move Second up' }).click();
+
+  await expect(page.getByRole('heading', { level: 2 })).toHaveText(['Second (0)', 'First (0)', 'web (2)', 'websecure (1)']);
+  await expect(page.getByRole('button', { name: 'Move Second up' })).toBeDisabled();
+});
+
+test('a route can be renamed, and goes back to its router name when cleared', async ({ page, homepage }) => {
+  await details(page, 'grafana').click();
+  await page.getByRole('button', { name: 'Change name or icon' }).click();
+  const form = page.getByRole('dialog', { name: 'Name and icon' });
+  await form.getByLabel('Name').fill('Dashboards');
+  await form.getByRole('button', { name: 'Save' }).click();
+
+  await expect(details(page, 'Dashboards')).toBeVisible();
+  expect((await homepage.readConfig()).routes).toEqual({ 'grafana@docker': { name: 'Dashboards' } });
+
+  await page.getByRole('button', { name: 'Change name or icon' }).click();
+  await form.getByLabel('Name').fill('');
+  await form.getByRole('button', { name: 'Save' }).click();
+  await expect(details(page, 'grafana')).toBeVisible();
+});
+
+test('a route added to Traefik shows up without reloading the page', async ({ page, traefik }) => {
+  traefik.state.routers.push({ name: 'radarr@docker', rule: 'Host(`radarr.test`)', entryPoints: ['web'], status: 'enabled' });
+  await expect(details(page, 'radarr')).toBeVisible({ timeout: 15000 });
+});
+
+test('the page keeps the last routes and explains why when Traefik goes away', async ({ page, traefik }) => {
+  traefik.state.down = true;
+  await expect(page.getByRole('alert')).toContainText('Showing the last routes we could load', { timeout: 15000 });
+  await expect(details(page, 'grafana')).toBeVisible();
+});
+
+test.describe('theme', () => {
+  test.use({ colorScheme: 'light' });
+
+  test('the chosen theme is kept after a reload', async ({ page }) => {
+    const toggle = page.getByRole('button', { name: 'Dark theme' });
+    await expect(toggle).toHaveAttribute('aria-pressed', 'false');
+    await toggle.click();
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+
+    await page.reload();
+    await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  });
+});

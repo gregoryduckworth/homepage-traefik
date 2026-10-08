@@ -1,6 +1,10 @@
 .git
 node_modules
 test
+e2e
+playwright.config.js
+test-results
+playwright-report
 *.md
 docker-compose.yml
 config
