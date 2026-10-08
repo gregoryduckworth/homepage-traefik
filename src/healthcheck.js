@@ -22,6 +22,22 @@ const CERT_ERRORS = new Set([
   'ERR_TLS_CERT_ALTNAME_INVALID',
 ]);
 
+// Headers that any server or connection adds, which say nothing about who sent the response.
+const ORDINARY_HEADERS = new Set(['date', 'connection', 'keep-alive']);
+
+// Traefik answers a request that none of its routers match with Go's plain "404 page not found": these three headers
+// and nothing else. A route's own app would normally send more, or a page of its own, so this usually means the check
+// reached a Traefik, or an entry point, that doesn't serve the route. A Go app using http.NotFound looks the same,
+// which is why the page shows this as a warning rather than as down.
+function isTraefikNotFound(statusCode, headers) {
+  if (statusCode !== 404) return false;
+  const names = Object.keys(headers).filter(name => !ORDINARY_HEADERS.has(name));
+  return names.length === 3
+    && headers['content-type'] === 'text/plain; charset=utf-8'
+    && headers['x-content-type-options'] === 'nosniff'
+    && headers['content-length'] === '19';
+}
+
 function seconds(ms) {
   const s = ms / 1000;
   return `${Number.isInteger(s) ? s : s.toFixed(1)} ${s === 1 ? 'second' : 'seconds'}`;
@@ -105,7 +121,7 @@ function probe(url, { method, timeoutMs, lookup = dns.lookup }) {
       clearTimeout(timer);
       res.on('error', () => {}); // cutting the body short can make the response emit "aborted"
       req.destroy(); // a GET fallback only needs the status line, not the body
-      resolve({ ok: true, statusCode: res.statusCode, latencyMs: Date.now() - start, address });
+      resolve({ ok: true, statusCode: res.statusCode, latencyMs: Date.now() - start, address, unrouted: isTraefikNotFound(res.statusCode, res.headers) });
     });
     req.once('error', err => {
       clearTimeout(timer);
@@ -132,7 +148,10 @@ async function checkHealth(url, { timeoutMs = DEFAULT_TIMEOUT_MS, address, looku
 
   const base = { method, attempts: retry ? 2 : 1, address: attempt.address, checkedAt };
   if (attempt.ok) {
-    return { reachable: true, statusCode: attempt.statusCode, latencyMs: attempt.latencyMs, error: null, phase: null, detail: null, ...base };
+    const detail = attempt.unrouted
+      ? `${attempt.address || host} answered "404 page not found", which is what Traefik sends when none of its routers match ${host}. The check may have reached a different Traefik, or an entry point the route isn't on.`
+      : null;
+    return { reachable: true, statusCode: attempt.statusCode, latencyMs: attempt.latencyMs, unrouted: attempt.unrouted, error: null, phase: null, detail, ...base };
   }
   const detail = describeFailure({ ...attempt, host, timeoutMs });
   return { reachable: false, statusCode: null, latencyMs: null, error: attempt.error, phase: attempt.phase, detail, ...base };
@@ -149,4 +168,4 @@ async function checkAllRoutes(routes, { concurrency = DEFAULT_CONCURRENCY, ...op
   return new Map(probed.map((route, index) => [route.id, results[index]]));
 }
 
-module.exports = { checkHealth, checkAllRoutes, describeFailure, isCheckable, lookupFor };
+module.exports = { checkHealth, checkAllRoutes, describeFailure, isCheckable, isTraefikNotFound, lookupFor };

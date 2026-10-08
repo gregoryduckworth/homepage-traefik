@@ -2,7 +2,7 @@ const { describe, it, after } = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
 const net = require('node:net');
-const { checkHealth, checkAllRoutes, describeFailure } = require('../src/healthcheck');
+const { checkHealth, checkAllRoutes, describeFailure, isTraefikNotFound } = require('../src/healthcheck');
 
 const TIMEOUT_MS = 200;
 const servers = [];
@@ -86,6 +86,28 @@ describe('checkHealth', () => {
     assert.deepEqual([result.error, result.phase], ['TIMEOUT', 'tls']);
   });
 
+  it('recognises the 404 Traefik sends when no router matches the host', async () => {
+    // Written by hand to match Traefik v3 byte for byte; Node's own server would add headers of its own.
+    const port = await listen(net.createServer(socket => socket.once('data', () => socket.end([
+      'HTTP/1.1 404 Not Found',
+      'Content-Type: text/plain; charset=utf-8',
+      'X-Content-Type-Options: nosniff',
+      'Date: Thu, 08 Oct 2026 18:48:55 GMT',
+      'Content-Length: 19',
+      '',
+      '',
+    ].join('\r\n')))));
+    const result = await checkHealth(`http://app.test:${port}`, { timeoutMs: TIMEOUT_MS, address: '127.0.0.1' });
+    assert.deepEqual([result.reachable, result.statusCode, result.unrouted], [true, 404, true]);
+    assert.match(result.detail, /none of its routers match app\.test/);
+  });
+
+  it('treats an app\'s own 404 as an ordinary response', async () => {
+    const port = await httpServer((req, res) => res.writeHead(404, { 'Content-Type': 'text/html' }).end('<h1>Not here</h1>'));
+    const result = await checkHealth(`http://127.0.0.1:${port}`, { timeoutMs: TIMEOUT_MS });
+    assert.deepEqual([result.statusCode, result.unrouted, result.detail], [404, false, null]);
+  });
+
   it('reports a refused connection without retrying', async () => {
     const port = await closedPort();
     const result = await checkHealth(`http://127.0.0.1:${port}`, { timeoutMs: TIMEOUT_MS });
@@ -116,6 +138,20 @@ describe('checkHealth', () => {
     const port = await httpServer((req, res) => res.writeHead(200).end());
     const { checkedAt } = await checkHealth(`http://127.0.0.1:${port}`, { timeoutMs: TIMEOUT_MS });
     assert.ok(!Number.isNaN(Date.parse(checkedAt)));
+  });
+});
+
+describe('isTraefikNotFound', () => {
+  const traefik = { 'content-type': 'text/plain; charset=utf-8', 'x-content-type-options': 'nosniff', 'content-length': '19', date: 'x', connection: 'close' };
+
+  it('matches Traefik\'s 404', () => {
+    assert.equal(isTraefikNotFound(404, traefik), true);
+  });
+
+  it('does not match another status, another body or extra headers', () => {
+    assert.equal(isTraefikNotFound(200, traefik), false);
+    assert.equal(isTraefikNotFound(404, { ...traefik, 'content-length': '9' }), false);
+    assert.equal(isTraefikNotFound(404, { ...traefik, server: 'nginx' }), false);
   });
 });
 

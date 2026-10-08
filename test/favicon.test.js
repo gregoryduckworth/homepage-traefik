@@ -199,11 +199,12 @@ describe('createIconStore', () => {
     assert.deepEqual(store.get('a'), found);
   });
 
-  it('does not look up routes that are down, disabled or have no link', async () => {
+  it('does not look up routes that are down, disabled, not routed by Traefik or have no link', async () => {
     const store = makeStore();
     await store.refresh([
       route('down', { reachable: false }),
       route('error', { reachable: true, statusCode: 502 }),
+      route('unrouted', { reachable: true, statusCode: 404, unrouted: true }),
       route('unchecked', null),
       { ...route('off'), status: 'disabled' },
       { ...route('nolink'), url: null },
