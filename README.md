@@ -76,6 +76,7 @@ services:
 | `HOMEPAGE_TITLE`               | `Routes`               | Heading and browser tab title                                                                                     |
 | `CONFIG_FILE`                  | `config/homepage.json` | Stores your groups, names, icons and latest health checks (`/app/config/homepage.json` in the image)              |
 | `PORT`                         | `3000`                 | Port the homepage listens on                                                                                      |
+| `FRAME_ANCESTORS`              | `'self'`               | Sites allowed to show the homepage in a frame, separated by spaces, for example `https://dash.example.com` or `*` |
 
 ## What gets shown
 
@@ -147,7 +148,7 @@ Groups are saved on the server, so everyone who opens the page sees the same lay
 - The server also keeps the latest health check of each route in the file, under `health`. It rewrites that section after each round of checks (once per `HEALTHCHECK_INTERVAL_SECONDS` at most, or when routes are added or removed), and leaves `groups` and anything else in the file as it is. You don't need to edit it; deleting it just means every route is checked again on the next poll.
 - The page picks up changes to the file within one refresh, without a restart. If the file isn't valid, the page says why and keeps showing the last groups it loaded, and changes from the page are refused until the file is fixed.
 
-Anyone who can open the homepage can change the groups, names and icons.
+Anyone who can open the homepage can change the groups, names and icons. So that another site can't trick someone into making those changes, other sites can't show the homepage in a frame. If you show it inside another dashboard, set `FRAME_ANCESTORS` to that dashboard's address, for example `https://dash.example.com`.
 
 ### Keeping your settings with your Compose project
 

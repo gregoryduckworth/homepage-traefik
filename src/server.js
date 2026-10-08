@@ -169,10 +169,14 @@ function pathParam(pathname, prefix) {
   }
 }
 
-// `events`, when given, serves /api/events and tells other open pages about changes saved here.
-function createServer({ store, config, title, icons = { get: () => null }, events = null }) {
+// `events`, when given, serves /api/events and tells other open pages about changes saved here. `frameAncestors`
+// lists the sites that may show the page in a frame: anyone who can open it can change its groups, so by default
+// only the homepage itself may, which stops another site tricking someone into dragging routes about.
+function createServer({ store, config, title, icons = { get: () => null }, events = null, frameAncestors = "'self'" }) {
   return http.createServer(async (req, res) => {
     const { pathname } = new URL(req.url, 'http://localhost');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Security-Policy', `frame-ancestors ${frameAncestors}`);
 
     if (pathname === '/api/routes') {
       const { groups, routes: settings, error: configError } = await config.read();
@@ -266,8 +270,31 @@ function readSeconds(env, name, { fallback, min }) {
   return value;
 }
 
+// A port that isn't a whole number from 1 to 65535 would otherwise crash the server as it starts.
+function readPort(env, fallback = 3000) {
+  const raw = env.PORT;
+  if (raw === undefined || raw.trim() === '') return fallback;
+  const value = Number(raw);
+  if (Number.isInteger(value) && value >= 1 && value <= 65535) return value;
+  console.warn(`PORT=${raw} isn't a port number from 1 to 65535, so ${fallback} is used`);
+  return fallback;
+}
+
+// The sources in FRAME_ANCESTORS, such as "https://dash.example.com" or "*", go straight into a header, so anything
+// that would end the directive or the header is refused.
+function readFrameAncestors(env, fallback = "'self'") {
+  const raw = (env.FRAME_ANCESTORS || '').trim();
+  if (!raw) return fallback;
+  if (/[;,\r\n]/.test(raw)) {
+    console.warn(`FRAME_ANCESTORS=${raw} should be a space-separated list of sites, so only the homepage itself may frame it`);
+    return fallback;
+  }
+  return raw;
+}
+
 if (require.main === module) {
-  const port = parseInt(process.env.PORT || '3000', 10);
+  const port = readPort(process.env);
+  const frameAncestors = readFrameAncestors(process.env);
   const traefikUrl = process.env.TRAEFIK_API_URL || 'http://traefik:8080';
   const pollSeconds = readSeconds(process.env, 'POLL_INTERVAL_SECONDS', { fallback: 30, min: 5 });
   const healthSeconds = readSeconds(process.env, 'HEALTHCHECK_INTERVAL_SECONDS', { fallback: 60, min: 10 });
@@ -324,7 +351,7 @@ if (require.main === module) {
       }
     };
 
-    const server = createServer({ store, config, title, icons, events });
+    const server = createServer({ store, config, title, icons, events, frameAncestors });
     server.listen(port, () => console.log(`Homepage on :${port}, reading routes from ${traefikUrl} every ${pollSeconds}s, checking each route every ${healthSeconds}s, groups from ${configFile}`));
     for (const signal of ['SIGINT', 'SIGTERM']) {
       process.on(signal, () => {
@@ -337,4 +364,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { createServer, createRouteStore, readSeconds };
+module.exports = { createServer, createRouteStore, readSeconds, readPort, readFrameAncestors };
