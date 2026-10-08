@@ -75,6 +75,14 @@ describe('createConfigStore', () => {
     assert.deepEqual(saved.groups, [{ name: 'Media', routes: [] }]);
   });
 
+  it('leaves the file untouched when writing fails for a reason other than permissions', async () => {
+    await fs.mkdir(path.dirname(file));
+    await fs.writeFile(file, '{"groups":[{"name":"Media"}]}');
+    await fs.mkdir(`${file}.tmp`); // Writing the temp file now fails with EISDIR.
+    await assert.rejects(createConfigStore({ file }).saveGroups([{ name: 'Tools' }]), { status: 500, message: /EISDIR/ });
+    assert.equal(await fs.readFile(file, 'utf8'), '{"groups":[{"name":"Media"}]}');
+  });
+
   it('creates the file and its directory when groups are saved', async () => {
     await createConfigStore({ file }).saveGroups([{ name: 'Media', routes: ['jellyfin@docker'] }]);
     const saved = JSON.parse(await fs.readFile(file, 'utf8'));

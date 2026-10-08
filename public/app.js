@@ -59,6 +59,8 @@ closeOnBackdrop(els.groupDialog);
 let data = { routes: [], groups: [], error: null, configError: null, updatedAt: null };
 let saveError = null;
 let saving = 0;
+// Bumped on every change made on this page, so a poll that started before the change can't undo it.
+let groupEdits = 0;
 // The id of the route being dragged. Re-rendering mid-drag would detach the dragged tile, so renders wait for the drop.
 let dragId = null;
 let renderPending = false;
@@ -362,13 +364,14 @@ function render() {
   }
 }
 
-// Saving is optimistic: the page shows the change at once and puts the old groups back if the server refuses it.
+// Saving is optimistic: the page shows the change at once. If the server refuses it, the page reloads the
+// groups the server has, which stays correct even when several saves were in flight.
 async function saveGroups(groups) {
   if (JSON.stringify(groups) === JSON.stringify(data.groups)) return;
-  const previous = data.groups;
   data.groups = groups;
   saveError = null;
   saving++;
+  groupEdits++;
   render();
   try {
     const res = await fetch('api/groups', {
@@ -378,14 +381,15 @@ async function saveGroups(groups) {
     });
     const body = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(body.error || `The homepage server responded with HTTP ${res.status}`);
-    data.groups = body.groups;
+    // A later save still in flight holds newer groups than this response.
+    if (saving === 1) data.groups = body.groups;
   } catch (err) {
-    data.groups = previous;
     saveError = err.message;
   } finally {
     saving--;
   }
-  render();
+  if (saveError) await load();
+  else render();
 }
 
 function moveRoute(id, target, beforeId) {
@@ -474,13 +478,14 @@ function dropTarget(event) {
   if (!section) return null;
   const group = section.dataset.group ?? null;
   const tile = group != null ? event.target.closest('[data-route]') : null;
-  return { section, group, tile: tile?.dataset.route === dragId ? null : tile };
+  return { section, group, tile };
 }
 
 for (const zone of [els.routes, els.ungroupZone]) {
   zone.addEventListener('dragover', event => {
     const target = dropTarget(event);
-    showDropHint(target?.section, target?.tile);
+    // No insertion bar on the tile being dragged: dropping it there leaves it where it is.
+    showDropHint(target?.section, target?.tile?.dataset.route === dragId ? null : target?.tile);
     if (!target) return;
     event.preventDefault();
     event.dataTransfer.dropEffect = 'move';
@@ -499,12 +504,14 @@ for (const zone of [els.routes, els.ungroupZone]) {
 }
 
 async function load() {
+  const edits = groupEdits;
   try {
     const res = await fetch('api/routes', { cache: 'no-store' });
     if (!res.ok) throw new Error(`The homepage server responded with HTTP ${res.status}`);
     const body = await res.json();
-    // Don't let a poll that started before a save finished put the old groups back.
-    data = { ...body, groups: saving ? data.groups : body.groups || [] };
+    // Keep this page's groups if it changed them while the request was out: the response may predate the change.
+    const stale = saving || edits !== groupEdits;
+    data = { ...body, groups: stale ? data.groups : body.groups || [] };
   } catch (err) {
     data = { ...data, error: `Can't reach the homepage server. ${err.message}` };
   }
