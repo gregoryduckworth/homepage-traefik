@@ -94,9 +94,9 @@ services:
 
 ## Groups
 
-By default routes are grouped by entrypoint. To make your own groups, select **New group**, name it, then drag routes onto it. Dropping a route on another route in a group puts it in front of that one, so you can also reorder routes this way. To take a route out of its group, drag it onto an entrypoint group or onto the box that appears at the bottom of the page while you drag. Each group heading has buttons to rename or delete it. Deleting a group sends its routes back to their entrypoint groups.
+By default routes are grouped by entrypoint. To make your own groups, select **New group**, name it, then drag routes onto it. Dropping a route on another route in a group puts it in front of that one, so you can also reorder routes this way. To take a route out of its group, drag it onto an entrypoint group or onto the box that appears at the bottom of the page while you drag. To reorder your groups, drag a group by its heading above or below another group, or use the up and down arrows on its heading. Each group heading also has buttons to rename or delete it. Deleting a group sends its routes back to their entrypoint groups.
 
-You can also move a route from its details panel by choosing a group in the **Group** menu. This works with a keyboard and on phones, where drag and drop can be unreliable.
+You can also move a route from its details panel by choosing a group in the **Group** menu. This and the arrow buttons work with a keyboard and on phones, where drag and drop can be unreliable.
 
 Groups are saved on the server, so everyone who opens the page sees the same layout. They are stored in a JSON file (`CONFIG_FILE`) that you can also edit by hand:
 

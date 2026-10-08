@@ -196,6 +196,7 @@ main {
 .notice strong { display: block; }
 
 .group {
+  position: relative;
   margin: 0 -0.5rem;
   padding: 0.25rem 0.5rem 0.5rem;
   border: 2px dashed transparent;
@@ -220,6 +221,7 @@ main {
 }
 
 .group[data-group] h2 { color: var(--ink); }
+.group[data-group] .group-head { cursor: grab; }
 .group h2 span { font-weight: 400; color: var(--muted); }
 
 .group-tool {
@@ -235,7 +237,8 @@ main {
   cursor: pointer;
 }
 
-.group-tool:hover { color: var(--accent); }
+.group-tool:hover:enabled { color: var(--accent); }
+.group-tool:disabled { opacity: 0.35; cursor: default; }
 .group-tool svg { width: 0.9375rem; height: 0.9375rem; }
 
 .group-empty {
@@ -248,9 +251,25 @@ main {
   border-radius: 6px;
 }
 
-/* Drop targets: the group under the pointer is outlined, and the tile the route will land before gets a bar. */
+/* Drop targets: the group under the pointer is outlined, and the tile the route will land before gets a bar.
+   A dragged group gets a bar in the gap above or below the group it will land next to. */
 .group[data-drop],
 .ungroup-zone[data-drop] { border-color: var(--accent); }
+
+.group[data-dragging] { opacity: 0.4; }
+
+.group[data-drop-place]::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: var(--accent);
+  border-radius: 2px;
+}
+
+.group[data-drop-place="before"]::before { top: calc(-0.5rem - 3.5px); }
+.group[data-drop-place="after"]::before { bottom: calc(-0.5rem - 3.5px); }
 
 .tiles li { position: relative; }
 .tiles li[data-dragging] { opacity: 0.4; }
