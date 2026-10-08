@@ -6,11 +6,20 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "test": "node --test"
+    "test": "node --test",
+    "test:e2e": "playwright test"
   },
-  "keywords": ["traefik", "dashboard", "homepage", "docker"],
+  "keywords": [
+    "traefik",
+    "dashboard",
+    "homepage",
+    "docker"
+  ],
   "license": "MIT",
   "engines": {
     "node": ">=20.0.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.0"
   }
 }

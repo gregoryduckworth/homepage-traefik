@@ -175,3 +175,13 @@ Requires Node.js 20 or newer.
 TRAEFIK_API_URL=http://localhost:8080 npm run dev
 npm test
 ```
+
+`npm test` runs the server's unit tests and needs nothing installed. The page itself is tested in a browser with [Playwright](https://playwright.dev). Each test starts its own homepage server against a fake Traefik API, so nothing else needs to be running:
+
+```sh
+npm install
+npx playwright install chromium
+npm run test:e2e
+```
+
+The image doesn't include Playwright; it's only a development dependency.
