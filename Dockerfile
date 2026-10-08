@@ -6,6 +6,8 @@ WORKDIR /app
 COPY package.json ./
 COPY src ./src
 COPY public ./public
+# Groups are saved here; mount a volume on it to keep them across container rebuilds.
+RUN mkdir config && chown node:node config
 
 USER node
 EXPOSE 3000

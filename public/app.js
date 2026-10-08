@@ -29,19 +29,39 @@ const els = {
   empty: $('empty'),
   themeToggle: $('theme-toggle'),
   details: $('details'),
+  detailsGroup: $('details-group'),
+  newGroup: $('new-group'),
+  groupDialog: $('group-dialog'),
+  groupForm: $('group-form'),
+  groupName: $('group-name'),
+  groupError: $('group-error'),
+  groupSubmit: $('group-submit'),
+  ungroupZone: $('ungroup-zone'),
 };
 
 const INFO_ICON = '<svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/></svg>';
+const RENAME_ICON = '<svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z"/></svg>';
+const DELETE_ICON = '<svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>';
+const DRAG_TYPE = 'application/x-homepage-route';
 
 // Backdrop clicks also target the dialog, as do clicks in its children's margins, so close only when outside its box.
-els.details.addEventListener('click', event => {
-  if (event.target !== els.details) return;
-  const box = els.details.getBoundingClientRect();
-  const inside = event.clientX >= box.left && event.clientX <= box.right && event.clientY >= box.top && event.clientY <= box.bottom;
-  if (!inside) els.details.close();
-});
+function closeOnBackdrop(dialog) {
+  dialog.addEventListener('click', event => {
+    if (event.target !== dialog) return;
+    const box = dialog.getBoundingClientRect();
+    const inside = event.clientX >= box.left && event.clientX <= box.right && event.clientY >= box.top && event.clientY <= box.bottom;
+    if (!inside) dialog.close();
+  });
+}
+closeOnBackdrop(els.details);
+closeOnBackdrop(els.groupDialog);
 
-let data = { routes: [], error: null, updatedAt: null };
+let data = { routes: [], groups: [], error: null, configError: null, updatedAt: null };
+let saveError = null;
+let saving = 0;
+// The id of the route being dragged. Re-rendering mid-drag would detach the dragged tile, so renders wait for the drop.
+let dragId = null;
+let renderPending = false;
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -88,6 +108,7 @@ function renderTile(route) {
 
   const link = el(route.url ? 'a' : 'span', 'tile-link');
   if (route.url) {
+    link.draggable = false;
     link.href = route.url;
     link.target = '_blank';
     link.rel = 'noopener noreferrer';
@@ -118,6 +139,10 @@ function renderTile(route) {
 
   tile.append(link, info);
   const item = el('li');
+  item.dataset.route = route.id;
+  item.draggable = true;
+  item.addEventListener('dragstart', event => startDrag(event, item));
+  item.addEventListener('dragend', endDrag);
   item.append(tile);
   return item;
 }
@@ -174,6 +199,11 @@ function fillDetails(route) {
     return [el('dt', null, term), dd];
   }));
 
+  const current = groupOf(route.id);
+  els.detailsGroup.replaceChildren(new Option('None', ''), ...data.groups.map(group => new Option(group.name, group.name)));
+  els.detailsGroup.value = current ? current.name : '';
+  els.detailsGroup.parentElement.hidden = !data.groups.length;
+
   const open = $('details-open');
   open.hidden = !route.url;
   if (route.url) {
@@ -222,34 +252,90 @@ function summaryText() {
   return parts.join(', ');
 }
 
+function groupOf(id) {
+  return data.groups.find(group => group.routes.includes(id));
+}
+
+function iconButton(icon, label, onClick) {
+  const button = el('button', 'group-tool');
+  button.type = 'button';
+  button.setAttribute('aria-label', label);
+  button.title = label;
+  button.innerHTML = icon;
+  button.addEventListener('click', onClick);
+  return button;
+}
+
+// Custom groups get rename and delete buttons; entry point groups are where ungrouped routes land.
+function renderSection(title, routes, group) {
+  const section = el('section', 'group');
+  const head = el('div', 'group-head');
+  const heading = el('h2', null, `${title} `);
+  heading.append(el('span', null, `(${routes.length})`));
+  head.append(heading);
+  section.append(head);
+
+  if (group) {
+    section.dataset.group = group.name;
+    head.append(
+      iconButton(RENAME_ICON, `Rename ${group.name}`, () => openGroupDialog(group.name)),
+      iconButton(DELETE_ICON, `Delete ${group.name}`, () => deleteGroup(group.name)),
+    );
+  }
+  if (group && !routes.length) {
+    section.append(el('p', 'group-empty', 'Drag routes here, or choose this group in a route’s details.'));
+  } else {
+    const list = el('ul', 'tiles');
+    list.append(...routes.map(renderTile));
+    section.append(list);
+  }
+  return section;
+}
+
+function renderNotice() {
+  const notices = [];
+  if (data.error) notices.push([data.routes.length ? 'Showing the last routes we could load' : 'No routes loaded', data.error]);
+  if (data.configError) notices.push(['Groups couldn’t be loaded from the config file', data.configError]);
+  if (saveError) notices.push(['Your group change wasn’t saved', saveError]);
+  els.notice.replaceChildren(...notices.map(([heading, text]) => {
+    const item = el('p');
+    item.append(el('strong', null, heading), text);
+    return item;
+  }));
+  els.notice.hidden = !notices.length;
+}
+
 function render() {
+  if (dragId) {
+    renderPending = true;
+    return;
+  }
+  renderPending = false;
   const query = els.filter.value.trim().toLowerCase();
   const visible = data.routes.filter(route => matches(route, query));
+  const byId = new Map(visible.map(route => [route.id, route]));
+  const assigned = new Set(data.groups.flatMap(group => group.routes));
+
+  // Configured routes that Traefik isn't serving right now stay in the file and reappear when they come back.
+  const custom = data.groups
+    .map(group => ({ group, routes: group.routes.map(id => byId.get(id)).filter(Boolean) }))
+    .filter(({ routes }) => routes.length || !query);
 
   const groups = new Map();
   for (const route of visible) {
+    if (assigned.has(route.id)) continue;
     const key = groupKey(route);
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(route);
   }
   const keys = [...groups.keys()].sort((a, b) => groups.get(b).length - groups.get(a).length || a.localeCompare(b));
 
-  els.routes.replaceChildren(...keys.map(key => {
-    const routes = groups.get(key);
-    const section = el('section', 'group');
-    const heading = el('h2', null, `${key} `);
-    heading.append(el('span', null, `(${routes.length})`));
-    const list = el('ul', 'tiles');
-    list.append(...routes.map(renderTile));
-    section.append(heading, list);
-    return section;
-  }));
+  els.routes.replaceChildren(
+    ...custom.map(({ group, routes }) => renderSection(group.name, routes, group)),
+    ...keys.map(key => renderSection(key, groups.get(key))),
+  );
 
-  if (data.error) {
-    const heading = el('strong', null, data.routes.length ? 'Showing the last routes we could load' : 'No routes loaded');
-    els.notice.replaceChildren(heading, document.createTextNode(data.error));
-  }
-  els.notice.hidden = !data.error;
+  renderNotice();
 
   renderStrip();
   refreshDetails();
@@ -276,11 +362,149 @@ function render() {
   }
 }
 
+// Saving is optimistic: the page shows the change at once and puts the old groups back if the server refuses it.
+async function saveGroups(groups) {
+  if (JSON.stringify(groups) === JSON.stringify(data.groups)) return;
+  const previous = data.groups;
+  data.groups = groups;
+  saveError = null;
+  saving++;
+  render();
+  try {
+    const res = await fetch('api/groups', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ groups }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || `The homepage server responded with HTTP ${res.status}`);
+    data.groups = body.groups;
+  } catch (err) {
+    data.groups = previous;
+    saveError = err.message;
+  } finally {
+    saving--;
+  }
+  render();
+}
+
+function moveRoute(id, target, beforeId) {
+  if (id === beforeId) return;
+  const groups = data.groups.map(group => ({ ...group, routes: group.routes.filter(routeId => routeId !== id) }));
+  const group = groups.find(g => g.name === target);
+  if (group) {
+    const index = beforeId ? group.routes.indexOf(beforeId) : -1;
+    group.routes.splice(index < 0 ? group.routes.length : index, 0, id);
+  }
+  saveGroups(groups);
+}
+
+function deleteGroup(name) {
+  const group = data.groups.find(g => g.name === name);
+  if (group.routes.length && !confirm(`Delete the “${name}” group? Its routes go back to their entry point groups.`)) return;
+  saveGroups(data.groups.filter(g => g !== group));
+}
+
+let renamingGroup = null;
+
+function openGroupDialog(name = null) {
+  renamingGroup = name;
+  $('group-dialog-title').textContent = name ? 'Rename group' : 'New group';
+  els.groupSubmit.textContent = name ? 'Rename group' : 'Create group';
+  els.groupName.value = name || '';
+  els.groupError.hidden = true;
+  els.groupDialog.showModal();
+}
+
+els.groupForm.addEventListener('submit', event => {
+  const name = els.groupName.value.trim();
+  const taken = data.groups.find(group => group.name.toLowerCase() === name.toLowerCase() && group.name !== renamingGroup);
+  if (!name || taken) {
+    event.preventDefault();
+    els.groupError.textContent = taken ? `There’s already a group called “${taken.name}”.` : 'Enter a name for the group.';
+    els.groupError.hidden = false;
+    return;
+  }
+  saveGroups(renamingGroup
+    ? data.groups.map(group => (group.name === renamingGroup ? { ...group, name } : group))
+    : [...data.groups, { name, routes: [] }]);
+});
+
+els.newGroup.addEventListener('click', () => openGroupDialog());
+$('group-cancel').addEventListener('click', () => els.groupDialog.close());
+els.detailsGroup.addEventListener('change', () => moveRoute(detailsId, els.detailsGroup.value || null));
+
+// Drag and drop: a tile dropped on a custom group joins it (before the tile it lands on), and one dropped on
+// an entry point group or the ungroup zone leaves its group.
+let dropHint = { section: null, tile: null };
+
+function showDropHint(section, tile) {
+  if (dropHint.section === section && dropHint.tile === tile) return;
+  dropHint.section?.removeAttribute('data-drop');
+  dropHint.tile?.removeAttribute('data-drop-before');
+  section?.setAttribute('data-drop', '');
+  tile?.setAttribute('data-drop-before', '');
+  dropHint = { section, tile };
+}
+
+function startDrag(event, item) {
+  dragId = item.dataset.route;
+  event.dataTransfer.effectAllowed = 'move';
+  event.dataTransfer.setData(DRAG_TYPE, dragId);
+  // Style the source after the browser has captured it as the drag image.
+  requestAnimationFrame(() => {
+    item.dataset.dragging = '';
+    els.ungroupZone.hidden = !groupOf(dragId);
+  });
+}
+
+function endDrag() {
+  if (!dragId) return;
+  dragId = null;
+  showDropHint(null, null);
+  els.ungroupZone.hidden = true;
+  els.routes.querySelector('[data-dragging]')?.removeAttribute('data-dragging');
+  if (renderPending) render();
+}
+
+function dropTarget(event) {
+  if (!dragId) return null;
+  if (els.ungroupZone.contains(event.target)) return { section: els.ungroupZone, group: null, tile: null };
+  const section = event.target.closest('.group');
+  if (!section) return null;
+  const group = section.dataset.group ?? null;
+  const tile = group != null ? event.target.closest('[data-route]') : null;
+  return { section, group, tile: tile?.dataset.route === dragId ? null : tile };
+}
+
+for (const zone of [els.routes, els.ungroupZone]) {
+  zone.addEventListener('dragover', event => {
+    const target = dropTarget(event);
+    showDropHint(target?.section, target?.tile);
+    if (!target) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'move';
+  });
+  zone.addEventListener('dragleave', event => {
+    if (!zone.contains(event.relatedTarget)) showDropHint(null, null);
+  });
+  zone.addEventListener('drop', event => {
+    const target = dropTarget(event);
+    if (!target) return;
+    event.preventDefault();
+    const id = dragId;
+    endDrag();
+    moveRoute(id, target.group, target.tile?.dataset.route);
+  });
+}
+
 async function load() {
   try {
     const res = await fetch('api/routes', { cache: 'no-store' });
     if (!res.ok) throw new Error(`The homepage server responded with HTTP ${res.status}`);
-    data = await res.json();
+    const body = await res.json();
+    // Don't let a poll that started before a save finished put the old groups back.
+    data = { ...body, groups: saving ? data.groups : body.groups || [] };
   } catch (err) {
     data = { ...data, error: `Can't reach the homepage server. ${err.message}` };
   }

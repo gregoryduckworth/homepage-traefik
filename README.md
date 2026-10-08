@@ -1,6 +1,6 @@
 # homepage-traefik
 
-A small homepage that lists every route Traefik is serving. It reads routers from the Traefik API (`/api/http/routers`), turns each `Host(...)` rule into a link, and groups the links by entrypoint. When you add a container with Traefik labels, it shows up on the page within one poll interval. There is nothing to configure per service.
+A small homepage that lists every route Traefik is serving. It reads routers from the Traefik API (`/api/http/routers`), turns each `Host(...)` rule into a link, and groups the links by entrypoint. When you add a container with Traefik labels, it shows up on the page within one poll interval. There is nothing to configure per service, though you can drag routes into your own groups (see [Groups](#groups)).
 
 The app is a single Node.js process with no runtime dependencies.
 
@@ -31,10 +31,15 @@ services:
     environment:
       TRAEFIK_API_URL: http://traefik:8080
       HOMEPAGE_TITLE: Home lab
+    volumes:
+      - homepage-config:/app/config
     labels:
       - traefik.enable=true
       - traefik.http.routers.homepage.rule=Host(`home.example.com`)
       - traefik.http.services.homepage.loadbalancer.server.port=3000
+
+volumes:
+  homepage-config:
 ```
 
 ## Adding it to an existing Traefik setup
@@ -67,6 +72,7 @@ services:
 | `HEALTHCHECK_TIMEOUT_SECONDS` | `10`                  | How long each health check request may take                                                                       |
 | `HEALTHCHECK_ADDRESS`         | (unset)               | Host or IP to send health checks to instead of resolving each route's hostname, for example `traefik` (see below) |
 | `HOMEPAGE_TITLE`              | `Routes`              | Heading and browser tab title                                                                                     |
+| `CONFIG_FILE`                 | `config/homepage.json` | JSON file that stores your groups, relative to the working directory (`/app/config/homepage.json` in the image)  |
 | `PORT`                        | `3000`                | Port the homepage listens on                                                                                      |
 
 ## What gets shown
@@ -86,7 +92,33 @@ services:
 - The page has light and dark themes. It follows your system setting until you pick one with the toggle.
 - If Traefik can't be reached, the page keeps showing the last routes it loaded and explains what went wrong.
 
-The server also exposes `GET /api/routes` (the normalized route list as JSON) and `GET /healthz`.
+## Groups
+
+By default routes are grouped by entrypoint. To make your own groups, select **New group**, name it, then drag routes onto it. Dropping a route on another route in a group puts it in front of that one, so you can also reorder routes this way. To take a route out of its group, drag it onto an entrypoint group or onto the box that appears at the bottom of the page while you drag. Each group heading has buttons to rename or delete it. Deleting a group sends its routes back to their entrypoint groups.
+
+You can also move a route from its details panel by choosing a group in the **Group** menu. This works with a keyboard and on phones, where drag and drop can be unreliable.
+
+Groups are saved on the server, so everyone who opens the page sees the same layout. They are stored in a JSON file (`CONFIG_FILE`) that you can also edit by hand:
+
+```json
+{
+  "groups": [
+    { "name": "Media", "routes": ["jellyfin@docker", "sonarr@docker"] },
+    { "name": "Monitoring", "routes": ["grafana@docker"] }
+  ]
+}
+```
+
+- Groups appear in the order they are listed, above the entrypoint groups, and routes appear in the order they are listed within each group.
+- A route is identified by its Traefik router name, shown as **Router** in its details panel. If a route is in more than one group, only the first one counts.
+- Routes that Traefik isn't serving right now stay in the file and return to their group when they come back.
+- The page picks up changes to the file within one refresh, without a restart. If the file isn't valid, the page says why and keeps showing the last groups it loaded, and changes from the page are refused until the file is fixed.
+
+To keep the file across container rebuilds, mount a volume on `/app/config` as in the examples above. If you use a bind mount instead, make sure the directory is writable by the container's `node` user (UID 1000). Anyone who can open the homepage can change the groups.
+
+## API
+
+The server also exposes `GET /api/routes` (the normalized route list, your groups and any config file error as JSON), `PUT /api/groups` (replaces the groups; send `{"groups": [...]}` as `application/json`) and `GET /healthz`.
 
 ## Development
 

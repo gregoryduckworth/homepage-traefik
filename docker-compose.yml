@@ -22,6 +22,8 @@ services:
       POLL_INTERVAL_SECONDS: 30
       # *.localhost resolves to the homepage container itself, so send health checks straight to Traefik.
       HEALTHCHECK_ADDRESS: traefik
+    volumes:
+      - homepage-config:/app/config # groups you create on the page are saved here
     depends_on:
       - traefik
     labels:
@@ -36,3 +38,6 @@ services:
       - traefik.enable=true
       - traefik.http.routers.whoami.rule=Host(`whoami.localhost`)
       - traefik.http.routers.whoami.entrypoints=web
+
+volumes:
+  homepage-config:
