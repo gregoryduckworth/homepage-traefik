@@ -1,5 +1,5 @@
 # Example stack: Traefik, the homepage, and a demo service.
-# Run `touch homepage.json && docker compose up -d`, then open http://home.localhost and http://whoami.localhost.
+# Run `touch homepage.json icons.json && docker compose up -d`, then open http://home.localhost and http://whoami.localhost.
 services:
   traefik:
     image: traefik:v3.1
@@ -26,6 +26,8 @@ services:
     volumes:
       # Groups, names and icons you set on the page are saved to this file, next to this compose file.
       - ./homepage.json:/app/config/homepage.json
+      # Icons found on the sites are cached here, so they show straight away after the container is recreated.
+      - ./icons.json:/app/config/icons.json
     depends_on:
       - traefik
     labels:

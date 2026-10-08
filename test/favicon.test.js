@@ -304,6 +304,10 @@ describe('parseSavedIcons', () => {
     assert.deepEqual([...saved.keys()], ['ok']);
   });
 
+  it('loads nothing from an empty file', () => {
+    assert.equal(parseSavedIcons(' \n').size, 0);
+  });
+
   it('loads nothing from a file that is not an object', () => {
     assert.equal(parseSavedIcons('[]').size, 0);
   });

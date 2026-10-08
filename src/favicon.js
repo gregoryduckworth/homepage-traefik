@@ -169,6 +169,8 @@ function isReachable(route) {
 // Icons saved by `serialize`, keyed by route id. The saved file is only a cache, so entries that aren't an image
 // are dropped rather than reported, and each icon's type and hash come from its bytes, not the file.
 function parseSavedIcons(text) {
+  // An empty file (say, one just created with touch so it can be mounted) means no icons yet.
+  if (!text.trim()) return new Map();
   const doc = JSON.parse(text);
   const entries = doc && typeof doc === 'object' && !Array.isArray(doc) ? Object.entries(doc) : [];
   const saved = new Map();

@@ -279,7 +279,11 @@ if (require.main === module) {
   // Icons found on the sites are saved beside the config file, so a restart shows them straight away.
   const iconsFile = path.join(path.dirname(configFile), 'icons.json');
   const loadIcons = () => fs.readFile(iconsFile, 'utf8').then(parseSavedIcons).catch(err => {
-    if (err.code !== 'ENOENT') console.warn(`Ignoring ${iconsFile}: ${err.message}`);
+    if (err.code === 'EISDIR') {
+      console.warn(`${iconsFile} is a directory, not a file, so icons won't be saved. Docker creates a directory when the file you mount doesn't exist on the host: create the file (an empty one is fine), remove the directory Docker made and recreate the container`);
+    } else if (err.code !== 'ENOENT') {
+      console.warn(`Ignoring ${iconsFile}: ${err.message}`);
+    }
     return new Map();
   });
 
