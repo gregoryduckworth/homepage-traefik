@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const { normalizeGroups, normalizeRouteSettings, storedHealth, createConfigStore } = require('../src/config');
+const { normalizeGroups, normalizeRouteSettings, normalizeLinks, storedHealth, createConfigStore } = require('../src/config');
 
 describe('normalizeGroups', () => {
   it('trims group names and defaults missing routes to an empty list', () => {
@@ -63,6 +63,26 @@ describe('normalizeRouteSettings', () => {
   for (const [when, input, message] of invalid) {
     it(`rejects input when ${when}`, () => {
       assert.throws(() => normalizeRouteSettings(input), { status: 400, message });
+    });
+  }
+});
+
+describe('normalizeLinks', () => {
+  it('trims fields and drops an empty icon', () => {
+    assert.deepEqual(normalizeLinks([{ name: ' Router ', url: ' http://192.168.1.1 ', icon: '' }]), [{ name: 'Router', url: 'http://192.168.1.1' }]);
+  });
+
+  const invalid = [
+    ['links is not a list', {}, /"links" must be a list/],
+    ['a link has no name', [{ url: 'http://a.test' }], /link 1 needs a name/],
+    ['a link has no address', [{ name: 'A' }], /address of link 1 must start with http/],
+    ['an address uses another scheme', [{ name: 'A', url: 'javascript:alert(1)' }], /must start with http/],
+    ['an icon is not a web address', [{ name: 'A', url: 'http://a.test', icon: 'a.png' }], /icon for link 1/],
+    ['two links share a name', [{ name: 'A', url: 'http://a.test' }, { name: 'a', url: 'http://b.test' }], /already a link called "a"/],
+  ];
+  for (const [when, input, message] of invalid) {
+    it(`rejects input when ${when}`, () => {
+      assert.throws(() => normalizeLinks(input), { status: 400, message });
     });
   }
 });
@@ -208,6 +228,49 @@ describe('createConfigStore', () => {
     await store.saveRoute('a@docker', { name: 'App' });
     assert.equal(await store.saveRoute('a@docker', { name: '', icon: '' }), null);
     assert.deepEqual(JSON.parse(await fs.readFile(file, 'utf8')), {});
+  });
+
+  it('adds a link, keeping the rest of the file', async () => {
+    const store = createConfigStore({ file });
+    await store.saveGroups([{ name: 'Home', routes: ['a@docker'] }]);
+    assert.deepEqual(await store.saveLink('Router', { name: 'Router', url: 'http://192.168.1.1' }), { name: 'Router', url: 'http://192.168.1.1' });
+    assert.deepEqual(JSON.parse(await fs.readFile(file, 'utf8')), {
+      groups: [{ name: 'Home', routes: ['a@docker'] }],
+      links: [{ name: 'Router', url: 'http://192.168.1.1' }],
+    });
+  });
+
+  it('renames a link in place and in its group', async () => {
+    const store = createConfigStore({ file });
+    await store.saveLink('NAS', { name: 'NAS', url: 'http://nas.lan' });
+    await store.saveLink('Router', { name: 'Router', url: 'http://192.168.1.1' });
+    await store.saveGroups([{ name: 'Home', routes: ['link:Router', 'a@docker'] }]);
+    await store.saveLink('router', { name: 'Gateway', url: 'http://192.168.1.1', icon: 'https://cdn.test/gw.svg' });
+    const { links, groups } = await store.read();
+    assert.deepEqual(links.map(link => link.name), ['NAS', 'Gateway']);
+    assert.deepEqual(groups, [{ name: 'Home', routes: ['link:Gateway', 'a@docker'] }]);
+  });
+
+  it('refuses a name another link has', async () => {
+    const store = createConfigStore({ file });
+    await store.saveLink('NAS', { name: 'NAS', url: 'http://nas.lan' });
+    await store.saveLink('Router', { name: 'Router', url: 'http://192.168.1.1' });
+    await assert.rejects(store.saveLink('Router', { name: 'nas', url: 'http://192.168.1.1' }), { status: 409, message: /already a link called "nas"/ });
+  });
+
+  it('deletes a link and takes it out of its group', async () => {
+    const store = createConfigStore({ file });
+    await store.saveLink('Router', { name: 'Router', url: 'http://192.168.1.1' });
+    await store.saveGroups([{ name: 'Home', routes: ['link:Router'] }]);
+    assert.equal(await store.deleteLink('Router'), true);
+    assert.equal(await store.deleteLink('Router'), false);
+    assert.deepEqual(JSON.parse(await fs.readFile(file, 'utf8')), { groups: [{ name: 'Home', routes: [] }] });
+  });
+
+  it('reports links in a hand-edited file that are not valid', async () => {
+    await fs.mkdir(path.dirname(file));
+    await fs.writeFile(file, JSON.stringify({ links: [{ name: 'Router' }] }));
+    assert.match((await createConfigStore({ file }).read()).error, /address of link 1/);
   });
 
   it('refuses to save route settings over a file that does not parse', async () => {

@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const { createServer, createRouteStore, readSeconds } = require('../src/server');
+const { createServer, createRouteStore, linkRoute, readSeconds } = require('../src/server');
 const { createConfigStore } = require('../src/config');
 const { createEvents } = require('../src/events');
 
@@ -118,6 +118,37 @@ describe('server', () => {
     assert.equal(res.headers.get('allow'), 'PUT');
   });
 
+  function changeLink(name, body) {
+    return fetch(`${base}/api/links/${encodeURIComponent(name)}`, body === undefined ? { method: 'DELETE' } : {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  }
+
+  it('adds a link, lists it with the routes, then deletes it', async () => {
+    const saved = await changeLink('Router', { name: 'Router', url: 'http://192.168.1.1/admin' });
+    assert.equal(saved.status, 200);
+    assert.deepEqual(await saved.json(), { link: { name: 'Router', url: 'http://192.168.1.1/admin' } });
+    let body = await (await fetch(`${base}/api/routes`)).json();
+    const link = body.routes.find(route => route.id === 'link:Router');
+    assert.deepEqual([link.protocol, link.url, link.host, link.path], ['link', 'http://192.168.1.1/admin', '192.168.1.1', '/admin']);
+
+    assert.equal((await changeLink('Router')).status, 200);
+    body = await (await fetch(`${base}/api/routes`)).json();
+    assert.equal(body.routes.some(route => route.id === 'link:Router'), false);
+  });
+
+  it('says why a link is refused', async () => {
+    const res = await changeLink('Bad', { name: 'Bad', url: 'ftp://files.lan' });
+    assert.equal(res.status, 400);
+    assert.match((await res.json()).error, /must start with http/);
+  });
+
+  it('returns 404 when deleting a link that does not exist', async () => {
+    assert.equal((await changeLink('Nothing')).status, 404);
+  });
+
   function putRoute(id, body) {
     return fetch(`${base}/api/routes/${encodeURIComponent(id)}`, {
       method: 'PUT',
@@ -216,6 +247,36 @@ describe('server events', () => {
     assert.equal(saved.status, 200);
     assert.match(await nextMessage(reader), /data: change/);
     await reader.cancel();
+  });
+});
+
+describe('createRouteStore links', () => {
+  it('lists links after the Traefik routes, checks them, and keeps them while Traefik is down', async () => {
+    let fail = false;
+    const fetchImpl = async () => {
+      if (fail) throw new Error('down');
+      return jsonResponse([{ name: 'app@docker', rule: 'Host(`app.test`)' }]);
+    };
+    const checked = [];
+    const checkRoutes = async routes => {
+      checked.push(...routes.map(route => route.id));
+      return new Map();
+    };
+    const store = createRouteStore({ traefikUrl: 'http://traefik:8080', fetchImpl, checkRoutes });
+    assert.equal(store.setLinks([{ name: 'NAS', url: 'https://nas.lan:5001' }]), true);
+    assert.equal(store.setLinks([{ name: 'NAS', url: 'https://nas.lan:5001' }]), false);
+    await store.refresh();
+    await store.refreshHealth();
+    assert.deepEqual(store.state.routes.map(route => route.id), ['app@docker', 'link:NAS']);
+    assert.deepEqual(checked, ['app@docker', 'link:NAS']);
+    fail = true;
+    await store.refresh();
+    assert.deepEqual(store.state.routes.map(route => route.id), ['app@docker', 'link:NAS']);
+  });
+
+  it('shapes a link like a route', () => {
+    const route = linkRoute({ name: 'NAS', url: 'https://nas.lan:5001/?tab=1', icon: 'https://cdn.test/nas.svg' });
+    assert.deepEqual([route.id, route.tls, route.host, route.path, route.status], ['link:NAS', true, 'nas.lan:5001', '?tab=1', 'enabled']);
   });
 });
 

@@ -570,6 +570,7 @@ a.tile-link:hover .tile-name { color: var(--accent); }
 
 .button-primary { color: #fff; background: var(--accent); border: 0; }
 .button-quiet { color: var(--ink); background: none; border: 1px solid var(--hairline); }
+.link-delete { margin-right: auto; color: var(--down-text); }
 
 .empty {
   max-width: 34rem;
@@ -586,6 +587,9 @@ a.tile-link:hover .tile-name { color: var(--accent); }
     grid-template-areas: "title" "tools" "strip";
   }
   .search { flex: 1; }
+  /* Icons alone, so the search box keeps its room; the labels stay for screen readers. */
+  .tool-button { padding: 0 0.8125rem; }
+  .tool-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
   .search input { width: 100%; font-size: 1rem; }
 
   /* Bottom sheet on phones, where a centred dialog leaves little room. */

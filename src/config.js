@@ -5,6 +5,8 @@ const MAX_GROUPS = 100;
 const MAX_NAME_LENGTH = 60;
 const MAX_ROUTE_SETTINGS = 1000;
 const MAX_ICON_LENGTH = 2048;
+const MAX_LINKS = 100;
+const LINK_PREFIX = 'link:';
 
 // Thrown for config the user can fix: a bad request body, or a hand-edited file that doesn't parse.
 class ConfigError extends Error {
@@ -68,6 +70,45 @@ function normalizeRouteSettings(input) {
     .filter(([, setting]) => setting));
 }
 
+function isWebAddress(value) {
+  return /^https?:\/\/./i.test(value) && URL.canParse(value) && value.length <= MAX_ICON_LENGTH;
+}
+
+// A link to a site that isn't behind Traefik, such as a router's admin page. Groups refer to it as "link:<name>",
+// so names are unique, ignoring case.
+function normalizeLink(input, label) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new ConfigError(`${label} must be an object with "name" and "url"`);
+  const field = key => {
+    const value = input[key] ?? '';
+    if (typeof value !== 'string') throw new ConfigError(`"${key}" for ${label} must be text`);
+    return value.trim();
+  };
+  const name = field('name');
+  const url = field('url');
+  const icon = field('icon');
+  if (!name) throw new ConfigError(`${label} needs a name`);
+  if (name.length > MAX_NAME_LENGTH) throw new ConfigError(`Link names can be at most ${MAX_NAME_LENGTH} characters`);
+  if (!isWebAddress(url)) throw new ConfigError(`The address of ${label} must start with http:// or https://`);
+  if (icon && !isWebAddress(icon)) throw new ConfigError(`The icon for ${label} must be the http:// or https:// address of an image`);
+  return { name, url, ...(icon && { icon }) };
+}
+
+function normalizeLinks(input) {
+  if (!Array.isArray(input)) throw new ConfigError('"links" must be a list');
+  if (input.length > MAX_LINKS) throw new ConfigError(`There can be at most ${MAX_LINKS} links`);
+  const names = new Set();
+  return input.map((item, index) => {
+    const link = normalizeLink(item, `link ${index + 1}`);
+    if (names.has(link.name.toLowerCase())) throw new ConfigError(`There's already a link called "${link.name}"`);
+    names.add(link.name.toLowerCase());
+    return link;
+  });
+}
+
+function linkId(name) {
+  return `${LINK_PREFIX}${name}`;
+}
+
 // Saved health results are only a cache, so entries that don't look like one are dropped rather than reported.
 function storedHealth(doc) {
   const entries = doc?.health && typeof doc.health === 'object' && !Array.isArray(doc.health) ? Object.entries(doc.health) : [];
@@ -76,10 +117,15 @@ function storedHealth(doc) {
 
 function parseConfig(text) {
   // An empty file (say, one just created with touch so it can be mounted) means no groups yet.
-  if (!text.trim()) return { doc: {}, groups: [], routes: {} };
+  if (!text.trim()) return { doc: {}, groups: [], routes: {}, links: [] };
   const doc = JSON.parse(text);
   if (!doc || typeof doc !== 'object' || Array.isArray(doc)) throw new ConfigError('expected a JSON object with a "groups" list');
-  return { doc, groups: normalizeGroups(doc.groups ?? []), routes: normalizeRouteSettings(doc.routes ?? {}) };
+  return {
+    doc,
+    groups: normalizeGroups(doc.groups ?? []),
+    routes: normalizeRouteSettings(doc.routes ?? {}),
+    links: normalizeLinks(doc.links ?? []),
+  };
 }
 
 function versionOf(stat) {
@@ -88,7 +134,7 @@ function versionOf(stat) {
 
 // The file is re-read whenever it changes on disk, so hand edits show up without a restart.
 function createConfigStore({ file }) {
-  const empty = { version: null, doc: {}, groups: [], routes: {}, error: null };
+  const empty = { version: null, doc: {}, groups: [], routes: {}, links: [], error: null };
   let cache = empty;
   let writing = Promise.resolve();
 
@@ -172,6 +218,42 @@ function createConfigStore({ file }) {
     });
   }
 
+  // Adds a link, or changes the one called `currentName`. Renaming it also renames it in its group, in the same
+  // write, so it doesn't drop out of the group. Returns the saved link.
+  async function saveLink(currentName, input) {
+    const link = normalizeLink(input, 'the link');
+    return queue(async () => {
+      const current = await readForChange('links');
+      const key = typeof currentName === 'string' ? currentName.toLowerCase() : null;
+      const others = current.links.filter(item => item.name.toLowerCase() !== key);
+      if (others.some(item => item.name.toLowerCase() === link.name.toLowerCase())) {
+        throw new ConfigError(`There's already a link called "${link.name}"`, 409);
+      }
+      const existing = current.links.find(item => item.name.toLowerCase() === key);
+      if (!existing && others.length >= MAX_LINKS) throw new ConfigError(`There can be at most ${MAX_LINKS} links`);
+      const links = existing ? current.links.map(item => (item === existing ? link : item)) : [...current.links, link];
+      const from = existing && linkId(existing.name);
+      const groups = current.groups.map(group => ({ ...group, routes: group.routes.map(id => (id === from ? linkId(link.name) : id)) }));
+      await commit(current, { ...current.doc, links, groups }, { links, groups });
+      return link;
+    });
+  }
+
+  // Removes a link and takes it out of its group. Resolves to whether there was one to remove.
+  async function deleteLink(name) {
+    return queue(async () => {
+      const current = await readForChange('links');
+      const key = typeof name === 'string' ? name.toLowerCase() : null;
+      const existing = current.links.find(item => item.name.toLowerCase() === key);
+      if (!existing) return false;
+      const links = current.links.filter(item => item !== existing);
+      const groups = current.groups.map(group => ({ ...group, routes: group.routes.filter(id => id !== linkId(existing.name)) }));
+      const { links: _links, ...rest } = current.doc;
+      await commit(current, { ...(links.length ? { ...current.doc, links } : rest), groups }, { links, groups });
+      return true;
+    });
+  }
+
   // Stores the latest health check of each route beside the groups, so a restart can show them straight away
   // and wait out the interval instead of checking every route again. A file that doesn't parse is left alone.
   async function saveHealth(health) {
@@ -183,7 +265,7 @@ function createConfigStore({ file }) {
     });
   }
 
-  return { file, read, saveGroups, saveRoute, saveHealth };
+  return { file, read, saveGroups, saveRoute, saveLink, deleteLink, saveHealth };
 }
 
-module.exports = { ConfigError, normalizeGroups, normalizeRouteSettings, storedHealth, createConfigStore };
+module.exports = { ConfigError, normalizeGroups, normalizeRouteSettings, normalizeLinks, linkId, storedHealth, createConfigStore };
