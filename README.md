@@ -17,7 +17,7 @@ The `config` folder is where the groups, names and icons you set on the page are
 
 ## Using the pre-built Docker image
 
-A pre-built image is published to GitHub Container Registry on every push to `main`. You can pull it directly instead of building from source:
+A pre-built image for `amd64` and `arm64` (such as a Raspberry Pi) is published to GitHub Container Registry on every push to `main`. You can pull it directly instead of building from source:
 
 ```sh
 docker pull ghcr.io/gregoryduckworth/homepage-traefik:main
