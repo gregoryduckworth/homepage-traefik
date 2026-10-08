@@ -164,6 +164,12 @@ describe('server', () => {
     assert.match(res.headers.get('content-type'), /text\/html/);
   });
 
+  it('serves the bundled font with a font type', async () => {
+    const res = await fetch(`${base}/fonts/atkinson-hyperlegible-latin-400-normal.woff2`);
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get('content-type'), 'font/woff2');
+  });
+
   it('does not serve files outside the public directory', async () => {
     const res = await fetch(`${base}/%2e%2e/package.json`);
     assert.equal(res.status, 404);
