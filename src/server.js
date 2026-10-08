@@ -13,7 +13,7 @@ const MIME_TYPES = {
   '.svg': 'image/svg+xml',
 };
 
-function createRouteStore({ traefikUrl, fetchImpl }) {
+function createRouteStore({ traefikUrl, fetchImpl, checkRoutes = checkAllRoutes, healthOptions = {} }) {
   const state = { routes: [], updatedAt: null, error: null };
   let healthResults = new Map();
 
@@ -36,7 +36,7 @@ function createRouteStore({ traefikUrl, fetchImpl }) {
 
   async function refreshHealth() {
     if (!state.routes.length) return;
-    healthResults = await checkAllRoutes(state.routes, { fetchImpl });
+    healthResults = await checkRoutes(state.routes, healthOptions);
   }
 
   function getRoutesWithHealth() {
@@ -87,8 +87,13 @@ if (require.main === module) {
   const traefikUrl = process.env.TRAEFIK_API_URL || 'http://traefik:8080';
   const pollMs = parseInt(process.env.POLL_INTERVAL_SECONDS || '30', 10) * 1000;
   const title = process.env.HOMEPAGE_TITLE || 'Routes';
+  const timeoutSeconds = parseFloat(process.env.HEALTHCHECK_TIMEOUT_SECONDS);
+  const healthOptions = {
+    timeoutMs: timeoutSeconds > 0 ? timeoutSeconds * 1000 : undefined,
+    address: process.env.HEALTHCHECK_ADDRESS || undefined,
+  };
 
-  const store = createRouteStore({ traefikUrl, fetchImpl: fetch });
+  const store = createRouteStore({ traefikUrl, fetchImpl: fetch, healthOptions });
   // Skip a tick if the previous cycle is still running, so a slow probe can't overwrite newer results.
   let polling = false;
   const poll = async () => {

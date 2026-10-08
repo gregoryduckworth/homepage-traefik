@@ -20,6 +20,8 @@ services:
       TRAEFIK_API_URL: http://traefik:8080
       HOMEPAGE_TITLE: Home lab
       POLL_INTERVAL_SECONDS: 30
+      # *.localhost resolves to the homepage container itself, so send health checks straight to Traefik.
+      HEALTHCHECK_ADDRESS: traefik
     depends_on:
       - traefik
     labels:

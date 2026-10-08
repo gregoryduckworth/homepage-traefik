@@ -18,7 +18,8 @@ describe('server', () => {
       if (failWith) throw failWith;
       return jsonResponse(traefikRouters);
     };
-    store = createRouteStore({ traefikUrl: 'http://traefik:8080', fetchImpl });
+    const checkRoutes = async routes => new Map(routes.map(route => [route.id, { reachable: true, statusCode: 200 }]));
+    store = createRouteStore({ traefikUrl: 'http://traefik:8080', fetchImpl, checkRoutes });
     traefikRouters = [{ name: 'app@docker', rule: 'Host(`app.test`)', status: 'enabled' }];
     await store.refresh();
     server = createServer({ store, title: 'My lab' });
