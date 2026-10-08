@@ -43,7 +43,11 @@ function createRouteStore({
   async function refresh() {
     const before = JSON.stringify([state.routes, state.error]);
     try {
-      state.routes = normalizeRouters(await fetchRouters(traefikUrl, { fetchImpl }), { ports: entryPointPorts });
+      const [httpRouters, tcpRouters] = await Promise.all([
+        fetchRouters(traefikUrl, { fetchImpl }),
+        fetchRouters(traefikUrl, { fetchImpl, protocol: 'tcp' }),
+      ]);
+      state.routes = normalizeRouters(httpRouters, { ports: entryPointPorts, tcpRouters });
       state.updatedAt = new Date().toISOString();
       state.error = null;
     } catch (err) {

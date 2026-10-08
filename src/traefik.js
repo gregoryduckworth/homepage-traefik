@@ -1,5 +1,6 @@
 const HOST_RE = /Host\(\s*`([^`]+)`/;
 const PATH_RE = /(?:PathPrefix|Path)\(\s*`([^`]+)`/;
+const HOST_SNI_RE = /HostSNI\(\s*`([^`]+)`/;
 
 function parseRule(rule = '') {
   const host = rule.match(HOST_RE);
@@ -31,15 +32,9 @@ function portOf(entryPoints, ports, tls) {
   return port && port !== (tls ? 443 : 80) ? port : null;
 }
 
-// `ports` maps entry point names to the port browsers reach them on, from parseEntryPointPorts.
-function normalizeRouter(router, { ports = new Map() } = {}) {
-  const { host, path } = parseRule(router.rule);
-  const tls = Boolean(router.tls);
+// The fields HTTP and TCP routes share.
+function baseRoute(router) {
   const [name, provider = router.provider || 'unknown'] = (router.name || 'unnamed').split('@');
-  const displayPath = path && path !== '/' ? path : '';
-  const entryPoints = router.entryPoints || [];
-  const port = host ? portOf(entryPoints, ports, tls) : null;
-
   return {
     id: router.name || name,
     name,
@@ -47,27 +42,61 @@ function normalizeRouter(router, { ports = new Map() } = {}) {
     status: router.status || 'unknown',
     rule: router.rule || '',
     service: (router.service || '').split('@')[0] || null,
-    entryPoints,
+    entryPoints: router.entryPoints || [],
     middlewares: router.middlewares || [],
     priority: router.priority ?? null,
     errors: router.error || [],
-    tls,
+    tls: Boolean(router.tls),
     certResolver: router.tls?.certResolver || null,
-    host,
-    port,
-    path: displayPath,
-    url: host ? `${tls ? 'https' : 'http'}://${host}${port ? `:${port}` : ''}${displayPath}` : null,
   };
 }
 
-// Routes are deduplicated on host+path so an HTTP->HTTPS redirect pair shows once, preferring TLS.
-function normalizeRouters(routers, options = {}) {
+// `ports` maps entry point names to the port browsers reach them on, from parseEntryPointPorts.
+function normalizeRouter(router, { ports = new Map() } = {}) {
+  const route = baseRoute(router);
+  const { host, path } = parseRule(router.rule);
+  const displayPath = path && path !== '/' ? path : '';
+  const port = host ? portOf(route.entryPoints, ports, route.tls) : null;
+  return {
+    ...route,
+    protocol: 'http',
+    host,
+    port,
+    path: displayPath,
+    url: host ? `${route.tls ? 'https' : 'http'}://${host}${port ? `:${port}` : ''}${displayPath}` : null,
+  };
+}
+
+// A TCP router has no web address to link to or check, so it's listed by name with its HostSNI hostname, if any.
+// Its id is prefixed so it can't clash with an HTTP router of the same name in the groups file.
+function normalizeTcpRouter(router) {
+  const route = baseRoute(router);
+  const sni = (router.rule || '').match(HOST_SNI_RE)?.[1];
+  return {
+    ...route,
+    id: `tcp:${route.id}`,
+    protocol: 'tcp',
+    passthrough: Boolean(router.tls?.passthrough),
+    host: sni && sni !== '*' ? sni : null,
+    port: null,
+    path: '',
+    url: null,
+  };
+}
+
+function isInternal(router) {
+  return router.provider === 'internal' || (router.name || '').endsWith('@internal');
+}
+
+// Routes are deduplicated on host+path so an HTTP->HTTPS redirect pair shows once, preferring TLS. TCP routes come
+// last, after the HTTP routes without a link. `ports` is as for normalizeRouter.
+function normalizeRouters(routers, { ports, tcpRouters = [] } = {}) {
   const byTarget = new Map();
   const unaddressable = [];
 
   for (const raw of routers) {
-    if (raw.provider === 'internal' || (raw.name || '').endsWith('@internal')) continue;
-    const route = normalizeRouter(raw, options);
+    if (isInternal(raw)) continue;
+    const route = normalizeRouter(raw, { ports });
     if (!route.host) {
       unaddressable.push(route);
       continue;
@@ -78,14 +107,17 @@ function normalizeRouters(routers, options = {}) {
   }
 
   const addressable = [...byTarget.values()].sort((a, b) => a.host.localeCompare(b.host) || a.path.localeCompare(b.path));
-  return [...addressable, ...unaddressable.sort((a, b) => a.name.localeCompare(b.name))];
+  const tcp = tcpRouters.filter(raw => !isInternal(raw)).map(normalizeTcpRouter);
+  const byName = (a, b) => a.name.localeCompare(b.name);
+  return [...addressable, ...unaddressable.sort(byName), ...tcp.sort(byName)];
 }
 
-async function fetchRouters(baseUrl, { fetchImpl = fetch, timeoutMs = 5000 } = {}) {
+// `protocol` is http or tcp, the two kinds of router this page lists.
+async function fetchRouters(baseUrl, { fetchImpl = fetch, timeoutMs = 5000, protocol = 'http' } = {}) {
   const routers = [];
   let page = 1;
   while (page) {
-    const url = new URL('/api/http/routers', baseUrl);
+    const url = new URL(`/api/${protocol}/routers`, baseUrl);
     url.searchParams.set('page', String(page));
     url.searchParams.set('per_page', '100');
     const res = await fetchImpl(url, { signal: AbortSignal.timeout(timeoutMs) });
@@ -99,4 +131,4 @@ async function fetchRouters(baseUrl, { fetchImpl = fetch, timeoutMs = 5000 } = {
   return routers;
 }
 
-module.exports = { parseRule, parseEntryPointPorts, normalizeRouter, normalizeRouters, fetchRouters };
+module.exports = { parseRule, parseEntryPointPorts, normalizeRouter, normalizeTcpRouter, normalizeRouters, fetchRouters };
