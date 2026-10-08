@@ -111,6 +111,7 @@ function failureLabel({ error, phase }) {
 function statusOf(route) {
   if (route.status === 'disabled') return { kind: 'off', label: 'Disabled' };
   if (route.status === 'warning') return { kind: 'warn', label: 'Warning' };
+  if (route.protocol === 'tcp') return { kind: 'off', label: 'TCP' };
   if (!route.url) return { kind: 'off', label: 'No link' };
   if (!route.health) return { kind: 'checking', label: 'Checking' };
   if (!route.health.reachable) return { kind: 'down', label: failureLabel(route.health) };
@@ -134,7 +135,9 @@ function watchedRoutes() {
   return data.routes.filter(route => !isHidden(route));
 }
 
+// A TCP route has no link, but its HostSNI hostname is still the address people know it by.
 function addressOf(route) {
+  if (route.protocol === 'tcp') return route.host;
   return route.url ? `${route.host}${route.port ? `:${route.port}` : ''}${route.path}` : null;
 }
 
@@ -223,6 +226,7 @@ function timeOf(iso) {
 function healthText(route) {
   const health = route.health;
   if (route.status === 'disabled') return 'Not checked while the router is disabled';
+  if (route.protocol === 'tcp') return 'Not checked: TCP routes have no web address to request';
   if (!route.url) return 'Not checked: the rule has no Host to request';
   if (!health) return 'Waiting for the first check';
   if (!health.reachable) return `${health.detail || 'The request failed.'} (${health.error})`;
@@ -233,6 +237,12 @@ function healthText(route) {
 function attemptText(health) {
   if (!health?.method) return null;
   return health.attempts > 1 ? 'HEAD, then retried with GET' : health.method;
+}
+
+function tlsText(route) {
+  if (!route.tls) return 'No';
+  if (route.passthrough) return 'Passed through to the service';
+  return route.certResolver ? `Yes, certificates from ${route.certResolver}` : 'Yes';
 }
 
 function detailRows(route) {
@@ -250,7 +260,8 @@ function detailRows(route) {
     ['Service', route.service],
     ['Entry points', route.entryPoints.join(', ')],
     ['Middlewares', route.middlewares.length ? route.middlewares.join(', ') : 'None'],
-    ['TLS', route.tls ? (route.certResolver ? `Yes, certificates from ${route.certResolver}` : 'Yes') : 'No'],
+    ['Protocol', route.protocol === 'tcp' ? 'TCP' : 'HTTP'],
+    ['TLS', tlsText(route)],
     ['Priority', route.priority],
   ].filter(([, value]) => value != null && value !== '');
 }

@@ -548,6 +548,8 @@ a.tile-link:hover .tile-name { color: var(--accent); }
   text-decoration: none;
 }
 
+.details-open[hidden] { display: none; }
+
 [data-theme="dark"] .details-open,
 [data-theme="dark"] .button-primary { color: var(--bg); }
 

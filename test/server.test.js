@@ -11,6 +11,11 @@ function jsonResponse(body) {
   return { ok: true, status: 200, headers: new Headers(), json: async () => body };
 }
 
+// Answers Traefik's HTTP routers endpoint with `routers` and its TCP routers endpoint with `tcp`.
+function routersResponse(url, routers, tcp = []) {
+  return jsonResponse(url.pathname === '/api/tcp/routers' ? tcp : routers);
+}
+
 describe('server', () => {
   let server;
   let store;
@@ -22,9 +27,9 @@ describe('server', () => {
   before(async () => {
     configDir = await fs.mkdtemp(path.join(os.tmpdir(), 'homepage-server-'));
     const config = createConfigStore({ file: path.join(configDir, 'homepage.json') });
-    const fetchImpl = async () => {
+    const fetchImpl = async url => {
       if (failWith) throw failWith;
-      return jsonResponse(traefikRouters);
+      return routersResponse(url, traefikRouters);
     };
     const checkRoutes = async routes => new Map(routes.map(route => [route.id, { reachable: true, statusCode: 200 }]));
     store = createRouteStore({ traefikUrl: 'http://traefik:8080', fetchImpl, checkRoutes });
@@ -235,10 +240,26 @@ describe('server events', () => {
 
 describe('createRouteStore entry point ports', () => {
   it('puts the configured port in route URLs', async () => {
-    const fetchImpl = async () => jsonResponse([{ name: 'app@docker', rule: 'Host(`app.test`)', entryPoints: ['websecure'], tls: {} }]);
+    const fetchImpl = async url => routersResponse(url, [{ name: 'app@docker', rule: 'Host(`app.test`)', entryPoints: ['websecure'], tls: {} }]);
     const store = createRouteStore({ traefikUrl: 'http://traefik:8080', fetchImpl, entryPointPorts: new Map([['websecure', 8443]]) });
     await store.refresh();
     assert.equal(store.state.routes[0].url, 'https://app.test:8443');
+  });
+});
+
+describe('createRouteStore TCP routers', () => {
+  it('lists TCP routers beside HTTP ones and never checks them', async () => {
+    const fetchImpl = async url => routersResponse(url, [{ name: 'app@docker', rule: 'Host(`app.test`)' }], [{ name: 'db@docker', rule: 'HostSNI(`db.test`)' }]);
+    const checked = [];
+    const checkRoutes = async routes => {
+      checked.push(...routes.map(route => route.id));
+      return new Map();
+    };
+    const store = createRouteStore({ traefikUrl: 'http://traefik:8080', fetchImpl, checkRoutes });
+    await store.refresh();
+    await store.refreshHealth();
+    assert.deepEqual(store.state.routes.map(route => route.id), ['app@docker', 'tcp:db@docker']);
+    assert.deepEqual(checked, ['app@docker']);
   });
 });
 
@@ -249,7 +270,7 @@ describe('createRouteStore health checks', () => {
   let routers;
 
   function makeStore(options = {}) {
-    const fetchImpl = async () => jsonResponse(routers);
+    const fetchImpl = async url => routersResponse(url, routers);
     const checkRoutes = async routes => {
       checked.push(routes.map(route => route.id));
       return new Map(routes.map(route => [route.id, { reachable: true, statusCode: 200, checkedAt: new Date(clock).toISOString() }]));

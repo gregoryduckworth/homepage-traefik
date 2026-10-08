@@ -1,6 +1,6 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
-const { parseRule, parseEntryPointPorts, normalizeRouter, normalizeRouters, fetchRouters } = require('../src/traefik');
+const { parseRule, parseEntryPointPorts, normalizeRouter, normalizeTcpRouter, normalizeRouters, fetchRouters } = require('../src/traefik');
 
 describe('parseRule', () => {
   it('extracts host and path prefix', () => {
@@ -134,7 +134,50 @@ describe('normalizeRouter with entry point ports', () => {
   });
 });
 
+describe('normalizeTcpRouter', () => {
+  it('lists a TCP router by its HostSNI hostname, without a link', () => {
+    const route = normalizeTcpRouter({
+      name: 'postgres@docker',
+      rule: 'HostSNI(`db.home.lan`)',
+      service: 'postgres@docker',
+      entryPoints: ['postgres'],
+      tls: { passthrough: true },
+      status: 'enabled',
+    });
+    assert.equal(route.id, 'tcp:postgres@docker');
+    assert.equal(route.name, 'postgres');
+    assert.equal(route.protocol, 'tcp');
+    assert.equal(route.host, 'db.home.lan');
+    assert.equal(route.url, null);
+    assert.equal(route.tls, true);
+    assert.equal(route.passthrough, true);
+    assert.deepEqual(route.entryPoints, ['postgres']);
+  });
+
+  it('has no hostname for a catch-all HostSNI rule', () => {
+    const route = normalizeTcpRouter({ name: 'mqtt@file', rule: 'HostSNI(`*`)' });
+    assert.equal(route.host, null);
+    assert.equal(route.passthrough, false);
+  });
+});
+
 describe('normalizeRouters', () => {
+  it('lists TCP routers after HTTP ones, without internal ones or a port', () => {
+    const routes = normalizeRouters(
+      [{ name: 'app@docker', rule: 'Host(`app.test`)', entryPoints: ['lan'] }, { name: 'metrics@file', rule: 'PathPrefix(`/m`)' }],
+      {
+        ports: new Map([['lan', 8080]]),
+        tcpRouters: [
+          { name: 'ssh@file', rule: 'HostSNI(`*`)', entryPoints: ['lan'] },
+          { name: 'db@docker', rule: 'HostSNI(`db.test`)' },
+          { name: 'x@internal', rule: 'HostSNI(`*`)' },
+        ],
+      },
+    );
+    assert.deepEqual(routes.map(r => [r.id, r.port]), [['app@docker', 8080], ['metrics@file', null], ['tcp:db@docker', null], ['tcp:ssh@file', null]]);
+  });
+
+
   it('filters internal routers', () => {
     const routes = normalizeRouters([
       { name: 'api@internal', provider: 'internal', rule: 'PathPrefix(`/api`)' },
@@ -194,6 +237,16 @@ describe('fetchRouters', () => {
       'http://traefik:8080/api/http/routers?page=1&per_page=100',
       'http://traefik:8080/api/http/routers?page=2&per_page=100',
     ]);
+  });
+
+  it('requests the TCP routers endpoint when asked', async () => {
+    const calls = [];
+    const fetchImpl = async url => {
+      calls.push(url.pathname);
+      return fakeResponse([]);
+    };
+    await fetchRouters('http://traefik:8080', { fetchImpl, protocol: 'tcp' });
+    assert.deepEqual(calls, ['/api/tcp/routers']);
   });
 
   it('throws a descriptive error on a non-2xx response', async () => {
