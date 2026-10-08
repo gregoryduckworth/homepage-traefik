@@ -768,6 +768,17 @@ function listen(catchUp = false) {
 }
 
 els.filter.addEventListener('input', render);
+
+// "/" jumps to the search box, as on many sites, unless someone is typing somewhere or a dialog is open.
+document.addEventListener('keydown', event => {
+  if (event.key !== '/' || event.ctrlKey || event.metaKey || event.altKey || event.defaultPrevented) return;
+  const target = event.target;
+  if (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return;
+  if (document.querySelector('dialog[open]')) return;
+  event.preventDefault();
+  els.filter.focus();
+  els.filter.select();
+});
 load();
 listen();
 setInterval(() => { if (!document.hidden) load(); }, REFRESH_MS);
