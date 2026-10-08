@@ -61,6 +61,8 @@ let saveError = null;
 let saving = 0;
 // Bumped on every change made on this page, so a poll that started before the change can't undo it.
 let groupEdits = 0;
+// The groups the server last reported, which the page falls back to when a save fails.
+let confirmedGroups = [];
 // The id of the route being dragged. Re-rendering mid-drag would detach the dragged tile, so renders wait for the drop.
 let dragId = null;
 let renderPending = false;
@@ -364,8 +366,8 @@ function render() {
   }
 }
 
-// Saving is optimistic: the page shows the change at once. If the server refuses it, the page reloads the
-// groups the server has, which stays correct even when several saves were in flight.
+// Saving is optimistic: the page shows the change at once. If the server refuses it, the page goes back to the
+// groups the server last confirmed and reloads them, which stays correct even when several saves were in flight.
 async function saveGroups(groups) {
   if (JSON.stringify(groups) === JSON.stringify(data.groups)) return;
   data.groups = groups;
@@ -373,6 +375,7 @@ async function saveGroups(groups) {
   saving++;
   groupEdits++;
   render();
+  let failed = false;
   try {
     const res = await fetch('api/groups', {
       method: 'PUT',
@@ -381,15 +384,26 @@ async function saveGroups(groups) {
     });
     const body = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(body.error || `The homepage server responded with HTTP ${res.status}`);
-    // A later save still in flight holds newer groups than this response.
-    if (saving === 1) data.groups = body.groups;
+    confirmedGroups = body.groups;
+    // A later save still in flight holds newer groups than this response. Once none is, the server has every
+    // change made on the page, including any whose own save failed, so an earlier error no longer applies.
+    if (saving === 1) {
+      data.groups = body.groups;
+      saveError = null;
+    }
   } catch (err) {
+    failed = true;
     saveError = err.message;
   } finally {
     saving--;
   }
-  if (saveError) await load();
-  else render();
+  // A save still in flight settles the groups itself when it finishes.
+  if (failed && !saving) {
+    data.groups = confirmedGroups;
+    await load();
+  } else {
+    render();
+  }
 }
 
 function moveRoute(id, target, beforeId) {
@@ -511,7 +525,8 @@ async function load() {
     const body = await res.json();
     // Keep this page's groups if it changed them while the request was out: the response may predate the change.
     const stale = saving || edits !== groupEdits;
-    data = { ...body, groups: stale ? data.groups : body.groups || [] };
+    if (!stale) confirmedGroups = body.groups || [];
+    data = { ...body, groups: stale ? data.groups : confirmedGroups };
   } catch (err) {
     data = { ...data, error: `Can't reach the homepage server. ${err.message}` };
   }
