@@ -1,4 +1,17 @@
 const REFRESH_MS = 30000;
+const CERT_ERROR = 'Certificate error';
+const FAILURE_LABELS = {
+  TIMEOUT: 'Timed out',
+  ENOTFOUND: 'DNS failed',
+  EAI_AGAIN: 'DNS failed',
+  ECONNREFUSED: 'Refused',
+  DEPTH_ZERO_SELF_SIGNED_CERT: CERT_ERROR,
+  SELF_SIGNED_CERT_IN_CHAIN: CERT_ERROR,
+  UNABLE_TO_VERIFY_LEAF_SIGNATURE: CERT_ERROR,
+  UNABLE_TO_GET_ISSUER_CERT_LOCALLY: CERT_ERROR,
+  CERT_HAS_EXPIRED: CERT_ERROR,
+  ERR_TLS_CERT_ALTNAME_INVALID: CERT_ERROR,
+};
 
 const $ = id => document.getElementById(id);
 const els = {
@@ -37,7 +50,7 @@ function statusOf(route) {
   if (route.status === 'warning') return { kind: 'warn', label: 'Warning' };
   if (!route.url) return { kind: 'off', label: 'No link' };
   if (!route.health) return { kind: 'checking', label: 'Checking' };
-  if (!route.health.reachable) return { kind: 'down', label: 'Down' };
+  if (!route.health.reachable) return { kind: 'down', label: FAILURE_LABELS[route.health.error] || 'Down', reason: route.health.error };
   if (route.health.statusCode >= 500) return { kind: 'down', label: `HTTP ${route.health.statusCode}` };
   return { kind: 'up', label: 'Up' };
 }
@@ -51,7 +64,7 @@ function renderTile(route) {
   const tile = el(route.url ? 'a' : 'div', 'tile');
   tile.dataset.kind = status.kind;
   if (route.status === 'disabled') tile.dataset.disabled = '';
-  tile.title = `${route.rule}\nProvider: ${route.provider}`;
+  tile.title = `${route.rule}\nProvider: ${route.provider}${status.reason ? `\nHealth check failed: ${status.reason}` : ''}`;
   if (route.url) {
     tile.href = route.url;
     tile.target = '_blank';
@@ -169,15 +182,25 @@ async function load() {
   render();
 }
 
+// Storage can throw when site data is blocked; the theme choice is a convenience, so fail quietly.
+function storedTheme() {
+  try { return localStorage.getItem('theme'); } catch { return null; }
+}
+
+const systemDark = matchMedia('(prefers-color-scheme: dark)');
+
 function applyTheme(theme) {
   document.documentElement.dataset.theme = theme;
   els.themeToggle.setAttribute('aria-pressed', String(theme === 'dark'));
 }
 
-applyTheme(localStorage.getItem('theme') || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'));
+applyTheme(storedTheme() || (systemDark.matches ? 'dark' : 'light'));
+systemDark.addEventListener('change', event => {
+  if (!storedTheme()) applyTheme(event.matches ? 'dark' : 'light');
+});
 els.themeToggle.addEventListener('click', () => {
   const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
-  localStorage.setItem('theme', next);
+  try { localStorage.setItem('theme', next); } catch {}
   applyTheme(next);
 });
 
