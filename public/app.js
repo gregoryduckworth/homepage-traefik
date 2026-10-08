@@ -1,5 +1,17 @@
-const GROUP_COLOURS = ['#3b82f6', '#10b981', '#f59e0b', '#a855f7', '#ec4899', '#14b8a6'];
 const REFRESH_MS = 30000;
+const CERT_ERROR = 'Certificate error';
+const FAILURE_LABELS = {
+  TIMEOUT: 'Timed out',
+  ENOTFOUND: 'DNS failed',
+  EAI_AGAIN: 'DNS failed',
+  ECONNREFUSED: 'Refused',
+  DEPTH_ZERO_SELF_SIGNED_CERT: CERT_ERROR,
+  SELF_SIGNED_CERT_IN_CHAIN: CERT_ERROR,
+  UNABLE_TO_VERIFY_LEAF_SIGNATURE: CERT_ERROR,
+  UNABLE_TO_GET_ISSUER_CERT_LOCALLY: CERT_ERROR,
+  CERT_HAS_EXPIRED: CERT_ERROR,
+  ERR_TLS_CERT_ALTNAME_INVALID: CERT_ERROR,
+};
 
 const $ = id => document.getElementById(id);
 const els = {
@@ -7,11 +19,22 @@ const els = {
   summary: $('summary'),
   filter: $('filter'),
   notice: $('notice'),
+  strip: $('strip'),
   routes: $('routes'),
   empty: $('empty'),
-  stats: $('stats'),
   themeToggle: $('theme-toggle'),
+  details: $('details'),
 };
+
+const INFO_ICON = '<svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/></svg>';
+
+// Backdrop clicks also target the dialog, as do clicks in its children's margins, so close only when outside its box.
+els.details.addEventListener('click', event => {
+  if (event.target !== els.details) return;
+  const box = els.details.getBoundingClientRect();
+  const inside = event.clientX >= box.left && event.clientX <= box.right && event.clientY >= box.top && event.clientY <= box.bottom;
+  if (!inside) els.details.close();
+});
 
 let data = { routes: [], error: null, updatedAt: null };
 
@@ -32,98 +55,182 @@ function matches(route, query) {
     .some(value => value && value.toLowerCase().includes(query));
 }
 
-// Traefik's router status wins over the probe: a disabled router can't be healthy.
-function statusOf(route) {
-  if (route.status === 'disabled') return { kind: 'disabled', label: 'Disabled' };
-  if (route.status === 'warning') return { kind: 'warning', label: 'Warning' };
-  if (!route.url) return { kind: 'unknown', label: 'No host' };
-  if (!route.health) return { kind: 'checking', label: 'Checking' };
-  if (!route.health.reachable) return { kind: 'unhealthy', label: 'Down' };
-  if (route.health.statusCode >= 500) return { kind: 'unhealthy', label: `HTTP ${route.health.statusCode}` };
-  return { kind: 'healthy', label: 'Up' };
+function failureLabel(code) {
+  if (FAILURE_LABELS[code]) return FAILURE_LABELS[code];
+  return code?.startsWith('ERR_SSL') ? 'TLS error' : 'Down';
 }
 
-function renderRoute(route) {
+// Traefik's router status wins over the probe: a disabled router can't be up.
+function statusOf(route) {
+  if (route.status === 'disabled') return { kind: 'off', label: 'Disabled' };
+  if (route.status === 'warning') return { kind: 'warn', label: 'Warning' };
+  if (!route.url) return { kind: 'off', label: 'No link' };
+  if (!route.health) return { kind: 'checking', label: 'Checking' };
+  if (!route.health.reachable) return { kind: 'down', label: failureLabel(route.health.error) };
+  if (route.health.statusCode >= 500) return { kind: 'down', label: `HTTP ${route.health.statusCode}` };
+  return { kind: 'up', label: 'Up' };
+}
+
+function displayName(route) {
+  return route.url ? `${route.host}${route.path}` : route.name;
+}
+
+function renderTile(route) {
   const status = statusOf(route);
-  const item = el('li');
-  const card = el('article', 'route-card');
-  card.dataset.status = route.status;
+  const tile = el('div', 'tile');
+  tile.dataset.kind = status.kind;
+  if (route.status === 'disabled') tile.dataset.disabled = '';
 
-  const info = el('div', 'route-info');
-  const host = el(route.url ? 'a' : 'span', 'route-host');
+  const link = el(route.url ? 'a' : 'span', 'tile-link');
   if (route.url) {
-    host.href = route.url;
-    host.target = '_blank';
-    host.rel = 'noopener noreferrer';
-    host.textContent = route.host;
-    if (route.path) host.append(el('span', 'route-path', route.path));
+    link.href = route.url;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+  }
+
+  const dot = el('span', 'dot');
+  if (status.kind === 'checking') dot.dataset.checking = '';
+
+  const host = el('span', 'tile-host', route.url ? route.host : route.name);
+  if (route.url && route.path) host.append(el('span', 'path', route.path));
+  const main = el('span', 'tile-main');
+  main.append(host, el('span', 'tile-sub', route.url ? route.service || route.name : route.rule));
+
+  const state = el('span', 'tile-state');
+  if (status.kind === 'up') {
+    state.append(el('span', 'visually-hidden', 'Up, '), `${route.health.latencyMs} ms`);
   } else {
-    host.textContent = route.name;
-    host.title = route.rule;
+    state.textContent = status.label;
   }
 
-  const meta = el('div', 'route-meta');
-  if (route.service) meta.append(el('span', 'tag', route.service));
-  meta.append(el('span', 'tag', route.provider));
-  if (route.tls) meta.append(el('span', 'tag', 'TLS'));
-  if (!route.url) meta.append(el('span', 'tag', route.rule));
-  info.append(host, meta);
+  link.append(dot, main, state);
 
-  const statusWrap = el('div', 'route-status');
-  if (status.kind === 'healthy' && route.health.latencyMs != null) {
-    statusWrap.append(el('span', 'latency', `${route.health.latencyMs} ms`));
-  }
-  const badge = el('span', `status-badge status-${status.kind}`);
-  badge.append(el('span', 'dot'), document.createTextNode(status.label));
-  if (status.kind === 'warning') badge.title = 'This router has warnings in the Traefik dashboard';
-  statusWrap.append(badge);
+  const info = el('button', 'tile-info');
+  info.type = 'button';
+  info.setAttribute('aria-label', `Details for ${displayName(route)}`);
+  info.innerHTML = INFO_ICON;
+  info.addEventListener('click', () => openDetails(route.id));
 
-  card.append(info, statusWrap);
-  item.append(card);
+  tile.append(link, info);
+  const item = el('li');
+  item.append(tile);
   return item;
 }
 
-function renderStats() {
-  const counts = { healthy: 0, unhealthy: 0, unknown: 0 };
-  for (const route of data.routes) {
-    const kind = statusOf(route).kind;
-    if (kind === 'healthy') counts.healthy++;
-    else if (kind === 'unhealthy' || kind === 'warning') counts.unhealthy++;
-    else counts.unknown++;
+function timeOf(iso) {
+  return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+function healthText(route) {
+  const health = route.health;
+  if (route.status === 'disabled') return 'Not checked while the router is disabled';
+  if (!route.url) return 'Not checked: the rule has no Host to request';
+  if (!health) return 'Waiting for the first check';
+  if (!health.reachable) return `Failed with ${health.error}`;
+  return `HTTP ${health.statusCode} in ${health.latencyMs} ms`;
+}
+
+function detailRows(route) {
+  const status = statusOf(route);
+  return [
+    ['Status', status.kind === 'checking' ? 'Checking' : status.label],
+    ['Health check', healthText(route)],
+    ['Last checked', route.health?.checkedAt && timeOf(route.health.checkedAt)],
+    ['Traefik status', route.status],
+    ['Router', route.id],
+    ['Rule', route.rule, 'code'],
+    ['Service', route.service],
+    ['Entry points', route.entryPoints.join(', ')],
+    ['Middlewares', route.middlewares.length ? route.middlewares.join(', ') : 'None'],
+    ['TLS', route.tls ? (route.certResolver ? `Yes, certificates from ${route.certResolver}` : 'Yes') : 'No'],
+    ['Priority', route.priority],
+  ].filter(([, value]) => value != null && value !== '');
+}
+
+function fillDetails(route) {
+  const status = statusOf(route);
+  $('details-dot').parentElement.dataset.kind = status.kind;
+  $('details-title').textContent = displayName(route);
+
+  const errors = $('details-errors');
+  errors.replaceChildren(...route.errors.map(message => el('p', null, message)));
+  errors.hidden = !route.errors.length;
+
+  $('details-list').replaceChildren(...detailRows(route).flatMap(([term, value, format]) => {
+    const dd = el('dd');
+    dd.append(format === 'code' ? el('code', null, value) : String(value));
+    return [el('dt', null, term), dd];
+  }));
+
+  const open = $('details-open');
+  open.hidden = !route.url;
+  if (route.url) {
+    open.href = route.url;
+    open.textContent = `Open ${displayName(route)}`;
   }
-  $('stat-total').textContent = data.routes.length;
-  $('stat-healthy').textContent = counts.healthy;
-  $('stat-unhealthy').textContent = counts.unhealthy;
-  $('stat-unknown').textContent = counts.unknown;
-  els.stats.hidden = !data.routes.length;
+}
+
+let detailsId = null;
+
+function openDetails(id) {
+  const route = data.routes.find(r => r.id === id);
+  if (!route) return;
+  detailsId = id;
+  fillDetails(route);
+  els.details.showModal();
+}
+
+function refreshDetails() {
+  if (!els.details.open) return;
+  const route = data.routes.find(r => r.id === detailsId);
+  if (route) fillDetails(route);
+  else els.details.close();
+}
+
+function renderStrip() {
+  const segments = data.routes.map(route => {
+    const status = statusOf(route);
+    const segment = el('span');
+    segment.dataset.kind = status.kind;
+    segment.title = `${displayName(route)}: ${status.label}`;
+    return segment;
+  });
+  els.strip.replaceChildren(...segments);
+  els.strip.hidden = !segments.length;
+}
+
+function summaryText() {
+  const count = data.routes.length;
+  const kinds = data.routes.map(route => statusOf(route).kind);
+  const up = kinds.filter(kind => kind === 'up').length;
+  const problems = kinds.filter(kind => kind === 'down' || kind === 'warn').length;
+  const parts = [`${up} of ${count} ${count === 1 ? 'route' : 'routes'} up`];
+  if (problems) parts.push(`${problems} ${problems === 1 ? 'needs' : 'need'} attention`);
+  return parts.join(', ');
 }
 
 function render() {
   const query = els.filter.value.trim().toLowerCase();
   const visible = data.routes.filter(route => matches(route, query));
 
-  // Colours come from the unfiltered list so a group keeps its colour while filtering.
-  const totals = new Map();
-  for (const route of data.routes) totals.set(groupKey(route), (totals.get(groupKey(route)) || 0) + 1);
-  const keys = [...totals.keys()].sort((a, b) => totals.get(b) - totals.get(a) || a.localeCompare(b));
+  const groups = new Map();
+  for (const route of visible) {
+    const key = groupKey(route);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(route);
+  }
+  const keys = [...groups.keys()].sort((a, b) => groups.get(b).length - groups.get(a).length || a.localeCompare(b));
 
-  const groups = new Map(keys.map(key => [key, []]));
-  for (const route of visible) groups.get(groupKey(route)).push(route);
-
-  const sections = keys.flatMap((key, index) => {
+  els.routes.replaceChildren(...keys.map(key => {
     const routes = groups.get(key);
-    if (!routes.length) return [];
-    const section = el('section', 'route-group');
-    const header = el('div', 'group-header');
-    const badge = el('h2', 'group-badge', key);
-    badge.style.background = GROUP_COLOURS[index % GROUP_COLOURS.length];
-    header.append(badge, el('span', 'group-count', `${routes.length} ${routes.length === 1 ? 'route' : 'routes'}`));
-    const list = el('ul', 'route-list');
-    list.append(...routes.map(renderRoute));
-    section.append(header, list);
-    return [section];
-  });
-  els.routes.replaceChildren(...sections);
+    const section = el('section', 'group');
+    const heading = el('h2', null, `${key} `);
+    heading.append(el('span', null, `(${routes.length})`));
+    const list = el('ul', 'tiles');
+    list.append(...routes.map(renderTile));
+    section.append(heading, list);
+    return section;
+  }));
 
   if (data.error) {
     const heading = el('strong', null, data.routes.length ? 'Showing the last routes we could load' : 'No routes loaded');
@@ -131,14 +238,17 @@ function render() {
   }
   els.notice.hidden = !data.error;
 
-  renderStats();
+  renderStrip();
+  refreshDetails();
 
   const count = data.routes.length;
   if (!data.updatedAt && !data.error) {
     els.summary.textContent = 'Looking up routes…';
   } else if (data.updatedAt) {
     const time = new Date(data.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    els.summary.textContent = `${count} ${count === 1 ? 'route' : 'routes'} · updated ${time}`;
+    const summary = count ? summaryText() : 'No routes';
+    els.summary.textContent = `${summary}. Updated ${time}.`;
+    els.strip.setAttribute('aria-label', summary);
   } else {
     els.summary.textContent = 'Waiting for Traefik';
   }
@@ -168,21 +278,28 @@ async function load() {
   render();
 }
 
+// Storage can throw when site data is blocked; the theme choice is a convenience, so fail quietly.
+function storedTheme() {
+  try { return localStorage.getItem('theme'); } catch { return null; }
+}
+
+const systemDark = matchMedia('(prefers-color-scheme: dark)');
+
 function applyTheme(theme) {
   document.documentElement.dataset.theme = theme;
   els.themeToggle.setAttribute('aria-pressed', String(theme === 'dark'));
 }
 
-const storedTheme = localStorage.getItem('theme');
-applyTheme(storedTheme || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'));
+applyTheme(storedTheme() || (systemDark.matches ? 'dark' : 'light'));
+systemDark.addEventListener('change', event => {
+  if (!storedTheme()) applyTheme(event.matches ? 'dark' : 'light');
+});
 els.themeToggle.addEventListener('click', () => {
   const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
-  localStorage.setItem('theme', next);
+  try { localStorage.setItem('theme', next); } catch {}
   applyTheme(next);
 });
 
 els.filter.addEventListener('input', render);
 load();
 setInterval(load, REFRESH_MS);
-// Cards fade in on first load only; later refreshes shouldn't replay it.
-setTimeout(() => document.body.classList.add('drawn'), 1000);

@@ -74,7 +74,12 @@ services:
 - When an HTTP router and an HTTPS router serve the same host and path (the usual redirect setup), only the HTTPS one is listed.
 - Routers without a `Host` rule (for example `HostRegexp` or path-only rules) are listed without a link.
 - Disabled routers, and routers that have warnings, are marked as such.
-- Each route with a link gets a live status. After every poll the server sends a `HEAD` request to the route's URL: any HTTP response below 500 shows as **Up** (with its response time), a 5xx shows the status code, and no response within 5 seconds shows as **Down**. The checks run from the homepage container, so its DNS must resolve your route hostnames (for example, `*.localhost` hosts resolve to the container itself and will show as Down).
+- Each enabled route with a link gets a live status, and a strip at the top shows every route's status at a glance. After every poll the server sends a `HEAD` request to the route's URL:
+  - Any HTTP response below 500 shows as **Up**, with its response time.
+  - A 5xx response shows its status code.
+  - A request that fails shows why: **Timed out** (no response within 5 seconds), **DNS failed**, **Refused**, **Certificate error** (the certificate isn't trusted, has expired or doesn't match the host), **TLS error** (the TLS handshake failed, for example HTTPS sent to a plain HTTP port), or **Down** for anything else. The details panel shows the underlying error code.
+- Each route has an info button that opens a details panel. It shows the route's status, the last health check (result, error code and when it ran), Traefik's own status and any error messages Traefik reports for the router, and the router's rule, service, entry points, middlewares, TLS certificate resolver and priority.
+- The checks run from the homepage container, so its DNS must resolve your route hostnames (for example, `*.localhost` hosts resolve to the container itself and will fail). Node does not trust self-signed certificates, Traefik's default certificate or private CAs, so HTTPS routes using them show **Certificate error** even when they work in your browser.
 - The page has light and dark themes. It follows your system setting until you pick one with the toggle.
 - If Traefik can't be reached, the page keeps showing the last routes it loaded and explains what went wrong.
 

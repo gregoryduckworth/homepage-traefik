@@ -89,8 +89,20 @@ if (require.main === module) {
   const title = process.env.HOMEPAGE_TITLE || 'Routes';
 
   const store = createRouteStore({ traefikUrl, fetchImpl: fetch });
-  store.refresh().then(() => store.refreshHealth());
-  setInterval(() => store.refresh().then(() => store.refreshHealth()), pollMs).unref();
+  // Skip a tick if the previous cycle is still running, so a slow probe can't overwrite newer results.
+  let polling = false;
+  const poll = async () => {
+    if (polling) return;
+    polling = true;
+    try {
+      await store.refresh();
+      await store.refreshHealth();
+    } finally {
+      polling = false;
+    }
+  };
+  poll();
+  setInterval(poll, pollMs).unref();
 
   const server = createServer({ store, title });
   server.listen(port, () => console.log(`Homepage on :${port}, reading routes from ${traefikUrl}`));
