@@ -1,5 +1,6 @@
 const { describe, it, after, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
+const dns = require('node:dns');
 const http = require('node:http');
 const net = require('node:net');
 const { findIcon, iconLinks, sniffImage, parseSavedIcons, createIconStore } = require('../src/favicon');
@@ -112,6 +113,15 @@ describe('findIcon', () => {
       '/web/icon.png': { body: PNG },
     });
     const icon = await findIcon(`${base}/`, { timeoutMs: TIMEOUT_MS });
+    assert.equal(icon.type, 'image/png');
+  });
+
+  it('follows a redirect from a bare domain to its www. name', async () => {
+    const www = await site({ '/': page('<link rel="icon" href="/icon.png">'), '/icon.png': { body: PNG } });
+    const bare = await site({ '/': { redirect: `${www.replace('127.0.0.1', 'www.app.test')}/` } });
+    // Every name resolves to loopback, where the two sites listen on their own ports.
+    const lookup = (hostname, options, callback) => dns.lookup('127.0.0.1', options, callback);
+    const icon = await findIcon(`${bare.replace('127.0.0.1', 'app.test')}/`, { timeoutMs: TIMEOUT_MS, lookup });
     assert.equal(icon.type, 'image/png');
   });
 
