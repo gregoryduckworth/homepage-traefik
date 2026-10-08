@@ -2,6 +2,7 @@ const http = require('node:http');
 const https = require('node:https');
 const dns = require('node:dns');
 const net = require('node:net');
+const { mapLimit } = require('./pool');
 
 const DEFAULT_TIMEOUT_MS = 10000;
 const DEFAULT_CONCURRENCY = 8;
@@ -51,10 +52,12 @@ function failure(code, message) {
   return Object.assign(new Error(message), { code });
 }
 
-// Pinning every lookup to one address sends checks to that host (for example Traefik) while keeping the
-// route's hostname in the Host header and TLS SNI, so Traefik still picks the right router.
-function pinnedLookup(address) {
-  return (hostname, options, callback) => dns.lookup(address, options, callback);
+// The DNS lookup for outgoing requests. Pinning every lookup to `address` sends them to that host (for example
+// Traefik) while keeping the route's hostname in the Host header and TLS SNI, so Traefik still picks the right
+// router. An explicit `lookup` wins over both.
+function lookupFor({ address, lookup }) {
+  if (lookup) return lookup;
+  return address ? (hostname, options, callback) => dns.lookup(address, options, callback) : dns.lookup;
 }
 
 function hostPort(ip, port) {
@@ -117,7 +120,7 @@ function probe(url, { method, timeoutMs, lookup = dns.lookup }) {
 async function checkHealth(url, { timeoutMs = DEFAULT_TIMEOUT_MS, address, lookup } = {}) {
   const checkedAt = new Date().toISOString();
   const host = new URL(url).hostname;
-  const opts = { timeoutMs, lookup: lookup || (address ? pinnedLookup(address) : dns.lookup) };
+  const opts = { timeoutMs, lookup: lookupFor({ address, lookup }) };
 
   let attempt = await probe(url, { ...opts, method: 'HEAD' });
   let method = 'HEAD';
@@ -142,16 +145,8 @@ function isCheckable(route) {
 // Checks run a few at a time: firing every probe at once makes slow hosts (and Traefik itself) queue up and time out.
 async function checkAllRoutes(routes, { concurrency = DEFAULT_CONCURRENCY, ...opts } = {}) {
   const probed = routes.filter(isCheckable);
-  const results = new Map();
-  let next = 0;
-  const worker = async () => {
-    while (next < probed.length) {
-      const route = probed[next++];
-      results.set(route.id, await checkHealth(route.url, opts));
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(concurrency, probed.length) }, worker));
-  return new Map(probed.map(route => [route.id, results.get(route.id)]));
+  const results = await mapLimit(probed, concurrency, route => checkHealth(route.url, opts));
+  return new Map(probed.map((route, index) => [route.id, results[index]]));
 }
 
-module.exports = { checkHealth, checkAllRoutes, describeFailure, isCheckable, pinnedLookup };
+module.exports = { checkHealth, checkAllRoutes, describeFailure, isCheckable, lookupFor };

@@ -1,8 +1,8 @@
 const http = require('node:http');
 const https = require('node:https');
 const crypto = require('node:crypto');
-const dns = require('node:dns');
-const { pinnedLookup } = require('./healthcheck');
+const { isCheckable, lookupFor } = require('./healthcheck');
+const { mapLimit } = require('./pool');
 
 const DEFAULT_TIMEOUT_MS = 10000;
 const DEFAULT_CONCURRENCY = 4;
@@ -134,7 +134,7 @@ function sniffImage(body) {
 // Looks for a route's icon the way a browser would: the icons its page links to, then /favicon.ico.
 // Resolves to { type, body, hash }, or null when nothing usable was found.
 async function findIcon(pageUrl, { timeoutMs = DEFAULT_TIMEOUT_MS, address, lookup } = {}) {
-  const opts = { timeoutMs, lookup: lookup || (address ? pinnedLookup(address) : dns.lookup) };
+  const opts = { timeoutMs, lookup: lookupFor({ address, lookup }) };
   let candidates = [];
   try {
     const page = await get(pageUrl, { ...opts, maxBytes: MAX_PAGE_BYTES, truncate: true });
@@ -158,7 +158,7 @@ async function findIcon(pageUrl, { timeoutMs = DEFAULT_TIMEOUT_MS, address, look
 }
 
 function isReachable(route) {
-  return Boolean(route.url) && route.status !== 'disabled' && route.health?.reachable && route.health.statusCode < 500;
+  return isCheckable(route) && route.health?.reachable && route.health.statusCode < 500;
 }
 
 // Keeps the icon found for each route in memory. A route is looked up once it's reachable, again when its URL
@@ -189,18 +189,13 @@ function createIconStore({
       for (const id of entries.keys()) if (!ids.has(id)) entries.delete(id);
 
       const due = routes.filter(route => isReachable(route) && isDue(route));
-      let next = 0;
-      const worker = async () => {
-        while (next < due.length) {
-          const route = due[next++];
-          const previous = entries.get(route.id);
-          const icon = await find(route.url, options).catch(() => null);
-          // A route that briefly fails keeps the icon it had, as long as its URL is the same.
-          const kept = icon || (previous?.url === route.url ? previous.icon : null);
-          entries.set(route.id, { url: route.url, checkedAt: now(), icon: kept });
-        }
-      };
-      await Promise.all(Array.from({ length: Math.min(concurrency, due.length) }, worker));
+      await mapLimit(due, concurrency, async route => {
+        const previous = entries.get(route.id);
+        const icon = await find(route.url, options).catch(() => null);
+        // A route that briefly fails keeps the icon it had, as long as its URL is the same.
+        const kept = icon || (previous?.url === route.url ? previous.icon : null);
+        entries.set(route.id, { url: route.url, checkedAt: now(), icon: kept });
+      });
     })().finally(() => {
       running = null;
     });

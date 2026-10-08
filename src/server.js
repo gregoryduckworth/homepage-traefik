@@ -237,9 +237,9 @@ if (require.main === module) {
   const healthSeconds = readSeconds(process.env, 'HEALTHCHECK_INTERVAL_SECONDS', { fallback: 60, min: 10 });
   const title = process.env.HOMEPAGE_TITLE || 'Routes';
   const configFile = path.resolve(process.env.CONFIG_FILE || 'config/homepage.json');
-  const timeoutSeconds = parseFloat(process.env.HEALTHCHECK_TIMEOUT_SECONDS);
+  const timeoutSeconds = readSeconds(process.env, 'HEALTHCHECK_TIMEOUT_SECONDS', { fallback: 10, min: 1 });
   const healthOptions = {
-    timeoutMs: timeoutSeconds > 0 ? timeoutSeconds * 1000 : undefined,
+    timeoutMs: timeoutSeconds * 1000,
     address: process.env.HEALTHCHECK_ADDRESS || undefined,
   };
 

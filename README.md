@@ -4,6 +4,8 @@ A small homepage that lists every route Traefik is serving. It reads routers fro
 
 The app is a single Node.js process with no runtime dependencies.
 
+![The homepage listing routes in two custom groups and one entrypoint group, with a status strip across the top and one route refused](docs/screenshot.png)
+
 ## Quick start with Docker Compose
 
 ```sh
@@ -68,10 +70,10 @@ services:
 | `TRAEFIK_API_URL`              | `http://traefik:8080`  | Base URL of the Traefik API                                                                                       |
 | `POLL_INTERVAL_SECONDS`        | `30`                   | How often the server refreshes routes from Traefik (at least 5)                                                   |
 | `HEALTHCHECK_INTERVAL_SECONDS` | `60`                   | How often each route gets a health check (at least 10; see below)                                                 |
-| `HEALTHCHECK_TIMEOUT_SECONDS`  | `10`                   | How long each health check request may take                                                                       |
+| `HEALTHCHECK_TIMEOUT_SECONDS`  | `10`                   | How long each health check and icon request may take (at least 1)                                                 |
 | `HEALTHCHECK_ADDRESS`          | (unset)                | Host or IP to send health checks to instead of resolving each route's hostname, for example `traefik` (see below) |
 | `HOMEPAGE_TITLE`               | `Routes`               | Heading and browser tab title                                                                                     |
-| `CONFIG_FILE`                  | `config/homepage.json` | JSON file that stores your groups and the latest health checks (`/app/config/homepage.json` in the image)         |
+| `CONFIG_FILE`                  | `config/homepage.json` | Stores your groups, names, icons and latest health checks (`/app/config/homepage.json` in the image)              |
 | `PORT`                         | `3000`                 | Port the homepage listens on                                                                                      |
 
 ## What gets shown
