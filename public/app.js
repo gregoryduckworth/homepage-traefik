@@ -561,4 +561,6 @@ els.themeToggle.addEventListener('click', () => {
 
 els.filter.addEventListener('input', render);
 load();
-setInterval(load, REFRESH_MS);
+// A tab in the background doesn't need fresh routes; it catches up as soon as it's shown again.
+setInterval(() => { if (!document.hidden) load(); }, REFRESH_MS);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) load(); });

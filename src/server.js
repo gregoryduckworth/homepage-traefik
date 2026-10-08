@@ -2,8 +2,8 @@ const http = require('node:http');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { fetchRouters, normalizeRouters } = require('./traefik');
-const { checkAllRoutes } = require('./healthcheck');
-const { ConfigError, createConfigStore } = require('./config');
+const { checkAllRoutes, isCheckable } = require('./healthcheck');
+const { ConfigError, storedHealth, createConfigStore } = require('./config');
 
 const PUBLIC_DIR = path.resolve(__dirname, '..', 'public');
 
@@ -16,9 +16,22 @@ const MIME_TYPES = {
 
 const MAX_BODY_BYTES = 64 * 1024;
 
-function createRouteStore({ traefikUrl, fetchImpl, checkRoutes = checkAllRoutes, healthOptions = {} }) {
+// Ticks start a little later each time, by however long the Traefik request took, so a route checked one interval
+// ago can look a moment too young. Without some slack it would wait a whole extra tick.
+const DUE_SLACK_MS = 2000;
+
+function createRouteStore({
+  traefikUrl,
+  fetchImpl,
+  checkRoutes = checkAllRoutes,
+  healthOptions = {},
+  healthIntervalMs = 0,
+  health = new Map(),
+  now = Date.now,
+}) {
   const state = { routes: [], updatedAt: null, error: null };
-  let healthResults = new Map();
+  // Keyed by route id. Each result records the URL it checked, so a route whose URL changes is checked again.
+  let healthResults = new Map(health);
 
   async function refresh() {
     try {
@@ -37,9 +50,35 @@ function createRouteStore({ traefikUrl, fetchImpl, checkRoutes = checkAllRoutes,
     }
   }
 
+  function isDue(route) {
+    const last = healthResults.get(route.id);
+    if (!last || last.url !== route.url) return true;
+    return now() - Date.parse(last.checkedAt) >= healthIntervalMs - DUE_SLACK_MS;
+  }
+
+  // Only routes that are new, have a new URL or were last checked an interval ago are checked, so each route gets
+  // at most one check per interval however often Traefik is polled. Returns whether any route was checked.
   async function refreshHealth() {
-    if (!state.routes.length) return;
-    healthResults = await checkRoutes(state.routes, healthOptions);
+    // Until Traefik has answered once there's nothing to check, and pruning would throw away the saved results.
+    if (!state.updatedAt) return false;
+    const checkable = state.routes.filter(isCheckable);
+    const due = checkable.filter(isDue);
+    if (due.length) {
+      const fresh = await checkRoutes(due, healthOptions);
+      for (const route of due) {
+        const result = fresh.get(route.id);
+        if (result) healthResults.set(route.id, { ...result, url: route.url });
+      }
+    }
+    // Forget routes Traefik no longer serves, so the saved results don't grow forever.
+    const kept = new Map(checkable.filter(route => healthResults.has(route.id)).map(route => [route.id, healthResults.get(route.id)]));
+    const pruned = kept.size !== healthResults.size;
+    healthResults = kept;
+    return due.length > 0 || pruned;
+  }
+
+  function getHealth() {
+    return Object.fromEntries(healthResults);
   }
 
   function getRoutesWithHealth() {
@@ -49,7 +88,7 @@ function createRouteStore({ traefikUrl, fetchImpl, checkRoutes = checkAllRoutes,
     });
   }
 
-  return { state, refresh, refreshHealth, getRoutesWithHealth };
+  return { state, refresh, refreshHealth, getHealth, getRoutesWithHealth };
 }
 
 function sendJson(res, status, body) {
@@ -128,10 +167,28 @@ function createServer({ store, config, title }) {
   });
 }
 
+// A missing, mistyped or tiny interval would otherwise poll back to back, so it falls back to the default or is
+// raised to the minimum.
+function readSeconds(env, name, { fallback, min }) {
+  const raw = env[name];
+  if (raw === undefined || raw.trim() === '') return fallback;
+  const value = Number(raw);
+  if (!Number.isFinite(value)) {
+    console.warn(`${name}=${raw} isn't a number of seconds, so ${fallback} is used`);
+    return fallback;
+  }
+  if (value < min) {
+    console.warn(`${name}=${raw} is below the minimum, so ${min} is used`);
+    return min;
+  }
+  return value;
+}
+
 if (require.main === module) {
   const port = parseInt(process.env.PORT || '3000', 10);
   const traefikUrl = process.env.TRAEFIK_API_URL || 'http://traefik:8080';
-  const pollMs = parseInt(process.env.POLL_INTERVAL_SECONDS || '30', 10) * 1000;
+  const pollSeconds = readSeconds(process.env, 'POLL_INTERVAL_SECONDS', { fallback: 30, min: 5 });
+  const healthSeconds = readSeconds(process.env, 'HEALTHCHECK_INTERVAL_SECONDS', { fallback: 60, min: 10 });
   const title = process.env.HOMEPAGE_TITLE || 'Routes';
   const configFile = path.resolve(process.env.CONFIG_FILE || 'config/homepage.json');
   const timeoutSeconds = parseFloat(process.env.HEALTHCHECK_TIMEOUT_SECONDS);
@@ -140,7 +197,20 @@ if (require.main === module) {
     address: process.env.HEALTHCHECK_ADDRESS || undefined,
   };
 
-  const store = createRouteStore({ traefikUrl, fetchImpl: fetch, healthOptions });
+  const config = createConfigStore({ file: configFile });
+  let store;
+  let saveError = null;
+  const saveHealth = async () => {
+    try {
+      await config.saveHealth(store.getHealth());
+      saveError = null;
+    } catch (err) {
+      // Log once rather than on every check while the file stays unwritable.
+      if (err.message !== saveError) console.error(`Saving health checks to ${configFile} failed: ${err.message}`);
+      saveError = err.message;
+    }
+  };
+
   // Skip a tick if the previous cycle is still running, so a slow probe can't overwrite newer results.
   let polling = false;
   const poll = async () => {
@@ -148,18 +218,20 @@ if (require.main === module) {
     polling = true;
     try {
       await store.refresh();
-      await store.refreshHealth();
+      if (await store.refreshHealth()) await saveHealth();
     } finally {
       polling = false;
     }
   };
-  poll();
-  setInterval(poll, pollMs).unref();
 
-  const config = createConfigStore({ file: configFile });
-  const server = createServer({ store, config, title });
-  server.listen(port, () => console.log(`Homepage on :${port}, reading routes from ${traefikUrl}, groups from ${configFile}`));
-  for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => server.close(() => process.exit(0)));
+  config.read().then(({ doc }) => {
+    store = createRouteStore({ traefikUrl, fetchImpl: fetch, healthOptions, healthIntervalMs: healthSeconds * 1000, health: storedHealth(doc) });
+    const server = createServer({ store, config, title });
+    server.listen(port, () => console.log(`Homepage on :${port}, reading routes from ${traefikUrl} every ${pollSeconds}s, checking each route every ${healthSeconds}s, groups from ${configFile}`));
+    for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => server.close(() => process.exit(0)));
+    poll();
+    setInterval(poll, pollSeconds * 1000).unref();
+  });
 }
 
-module.exports = { createServer, createRouteStore };
+module.exports = { createServer, createRouteStore, readSeconds };

@@ -40,6 +40,12 @@ function normalizeGroups(input) {
   });
 }
 
+// Saved health results are only a cache, so entries that don't look like one are dropped rather than reported.
+function storedHealth(doc) {
+  const entries = doc?.health && typeof doc.health === 'object' && !Array.isArray(doc.health) ? Object.entries(doc.health) : [];
+  return new Map(entries.filter(([, result]) => result && typeof result.url === 'string' && !Number.isNaN(Date.parse(result.checkedAt))));
+}
+
 function parseConfig(text) {
   // An empty file (say, one just created with touch so it can be mounted) means no groups yet.
   if (!text.trim()) return { doc: {}, groups: [] };
@@ -129,7 +135,23 @@ function createConfigStore({ file }) {
     return run;
   }
 
-  return { file, read, saveGroups };
+  // Stores the latest health check of each route beside the groups, so a restart can show them straight away
+  // and wait out the interval instead of checking every route again. A file that doesn't parse is left alone.
+  async function saveHealth(health) {
+    const run = writing.then(async () => {
+      const current = await read();
+      if (current.error) return false;
+      const doc = { ...current.doc, health };
+      await write(`${JSON.stringify(doc, null, 2)}\n`);
+      const stat = await fs.stat(file);
+      cache = { ...current, version: `${stat.mtimeMs}:${stat.size}`, doc };
+      return true;
+    });
+    writing = run.catch(() => {});
+    return run;
+  }
+
+  return { file, read, saveGroups, saveHealth };
 }
 
-module.exports = { ConfigError, normalizeGroups, createConfigStore };
+module.exports = { ConfigError, normalizeGroups, storedHealth, createConfigStore };

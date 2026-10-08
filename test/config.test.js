@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const { normalizeGroups, createConfigStore } = require('../src/config');
+const { normalizeGroups, storedHealth, createConfigStore } = require('../src/config');
 
 describe('normalizeGroups', () => {
   it('trims group names and defaults missing routes to an empty list', () => {
@@ -131,5 +131,35 @@ describe('createConfigStore', () => {
     await Promise.all([store.saveGroups([{ name: 'First' }]), store.saveGroups([{ name: 'Second' }])]);
     const { groups } = await store.read();
     assert.deepEqual(groups, [{ name: 'Second', routes: [] }]);
+  });
+
+  it('saves health results beside the groups without changing them', async () => {
+    const store = createConfigStore({ file });
+    await store.saveGroups([{ name: 'Media', routes: ['a@docker'] }]);
+    const health = { 'a@docker': { url: 'http://a.test', reachable: true, checkedAt: '2026-01-01T00:00:00.000Z' } };
+    assert.equal(await store.saveHealth(health), true);
+    const saved = JSON.parse(await fs.readFile(file, 'utf8'));
+    assert.deepEqual(saved, { groups: [{ name: 'Media', routes: ['a@docker'] }], health });
+    await store.saveGroups([{ name: 'Tools' }]);
+    assert.deepEqual(JSON.parse(await fs.readFile(file, 'utf8')).health, health);
+  });
+
+  it('does not save health results over a file that does not parse', async () => {
+    await fs.mkdir(path.dirname(file));
+    await fs.writeFile(file, 'not json');
+    assert.equal(await createConfigStore({ file }).saveHealth({}), false);
+    assert.equal(await fs.readFile(file, 'utf8'), 'not json');
+  });
+});
+
+describe('storedHealth', () => {
+  it('keeps results that name a URL and when they were checked', () => {
+    const result = { url: 'http://a.test', reachable: true, checkedAt: '2026-01-01T00:00:00.000Z' };
+    assert.deepEqual([...storedHealth({ health: { 'a@docker': result } })], [['a@docker', result]]);
+  });
+
+  it('drops anything else', () => {
+    const health = { 'a@docker': { url: 'http://a.test' }, 'b@docker': { checkedAt: '2026-01-01T00:00:00.000Z' }, 'c@docker': null };
+    for (const doc of [{}, { health: [] }, { health: 'yes' }, { health }]) assert.equal(storedHealth(doc).size, 0);
   });
 });

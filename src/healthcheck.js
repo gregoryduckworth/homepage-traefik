@@ -135,9 +135,13 @@ async function checkHealth(url, { timeoutMs = DEFAULT_TIMEOUT_MS, address, looku
   return { reachable: false, statusCode: null, latencyMs: null, error: attempt.error, phase: attempt.phase, detail, ...base };
 }
 
+function isCheckable(route) {
+  return Boolean(route.url) && route.status !== 'disabled';
+}
+
 // Checks run a few at a time: firing every probe at once makes slow hosts (and Traefik itself) queue up and time out.
 async function checkAllRoutes(routes, { concurrency = DEFAULT_CONCURRENCY, ...opts } = {}) {
-  const probed = routes.filter(route => route.url && route.status !== 'disabled');
+  const probed = routes.filter(isCheckable);
   const results = new Map();
   let next = 0;
   const worker = async () => {
@@ -150,4 +154,4 @@ async function checkAllRoutes(routes, { concurrency = DEFAULT_CONCURRENCY, ...op
   return new Map(probed.map(route => [route.id, results.get(route.id)]));
 }
 
-module.exports = { checkHealth, checkAllRoutes, describeFailure };
+module.exports = { checkHealth, checkAllRoutes, describeFailure, isCheckable };
