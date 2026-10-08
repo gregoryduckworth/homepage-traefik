@@ -5,11 +5,16 @@ const FAILURE_LABELS = {
   ENOTFOUND: 'DNS failed',
   EAI_AGAIN: 'DNS failed',
   ECONNREFUSED: 'Refused',
+  ECONNRESET: 'Reset',
+  EHOSTUNREACH: 'Unreachable',
+  ENETUNREACH: 'Unreachable',
   DEPTH_ZERO_SELF_SIGNED_CERT: CERT_ERROR,
   SELF_SIGNED_CERT_IN_CHAIN: CERT_ERROR,
   UNABLE_TO_VERIFY_LEAF_SIGNATURE: CERT_ERROR,
+  UNABLE_TO_GET_ISSUER_CERT: CERT_ERROR,
   UNABLE_TO_GET_ISSUER_CERT_LOCALLY: CERT_ERROR,
   CERT_HAS_EXPIRED: CERT_ERROR,
+  CERT_NOT_YET_VALID: CERT_ERROR,
   ERR_TLS_CERT_ALTNAME_INVALID: CERT_ERROR,
 };
 
@@ -55,9 +60,9 @@ function matches(route, query) {
     .some(value => value && value.toLowerCase().includes(query));
 }
 
-function failureLabel(code) {
-  if (FAILURE_LABELS[code]) return FAILURE_LABELS[code];
-  return code?.startsWith('ERR_SSL') ? 'TLS error' : 'Down';
+function failureLabel({ error, phase }) {
+  if (FAILURE_LABELS[error]) return FAILURE_LABELS[error];
+  return phase === 'tls' || error?.startsWith('ERR_SSL') ? 'TLS error' : 'Down';
 }
 
 // Traefik's router status wins over the probe: a disabled router can't be up.
@@ -66,7 +71,7 @@ function statusOf(route) {
   if (route.status === 'warning') return { kind: 'warn', label: 'Warning' };
   if (!route.url) return { kind: 'off', label: 'No link' };
   if (!route.health) return { kind: 'checking', label: 'Checking' };
-  if (!route.health.reachable) return { kind: 'down', label: failureLabel(route.health.error) };
+  if (!route.health.reachable) return { kind: 'down', label: failureLabel(route.health) };
   if (route.health.statusCode >= 500) return { kind: 'down', label: `HTTP ${route.health.statusCode}` };
   return { kind: 'up', label: 'Up' };
 }
@@ -126,8 +131,13 @@ function healthText(route) {
   if (route.status === 'disabled') return 'Not checked while the router is disabled';
   if (!route.url) return 'Not checked: the rule has no Host to request';
   if (!health) return 'Waiting for the first check';
-  if (!health.reachable) return `Failed with ${health.error}`;
+  if (!health.reachable) return `${health.detail || 'The request failed.'} (${health.error})`;
   return `HTTP ${health.statusCode} in ${health.latencyMs} ms`;
+}
+
+function attemptText(health) {
+  if (!health?.method) return null;
+  return health.attempts > 1 ? 'HEAD, then retried with GET' : health.method;
 }
 
 function detailRows(route) {
@@ -135,6 +145,8 @@ function detailRows(route) {
   return [
     ['Status', status.kind === 'checking' ? 'Checking' : status.label],
     ['Health check', healthText(route)],
+    ['Checked with', attemptText(route.health)],
+    ['Address', route.health?.address],
     ['Last checked', route.health?.checkedAt && timeOf(route.health.checkedAt)],
     ['Traefik status', route.status],
     ['Router', route.id],
@@ -192,7 +204,8 @@ function renderStrip() {
     const status = statusOf(route);
     const segment = el('span');
     segment.dataset.kind = status.kind;
-    segment.title = `${displayName(route)}: ${status.label}`;
+    const reason = status.kind === 'down' && route.health?.detail;
+    segment.title = `${displayName(route)}: ${reason || status.label}`;
     return segment;
   });
   els.strip.replaceChildren(...segments);
