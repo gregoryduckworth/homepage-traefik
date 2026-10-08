@@ -116,13 +116,28 @@ describe('findIcon', () => {
     assert.equal(icon.type, 'image/png');
   });
 
-  it('follows a redirect from a bare domain to its www. name', async () => {
-    const www = await site({ '/': page('<link rel="icon" href="/icon.png">'), '/icon.png': { body: PNG } });
-    const bare = await site({ '/': { redirect: `${www.replace('127.0.0.1', 'www.app.test')}/` } });
-    // Every name resolves to loopback, where the two sites listen on their own ports.
+  describe('redirects between named hosts', () => {
+    // Every name resolves to loopback, where each site listens on its own port.
     const lookup = (hostname, options, callback) => dns.lookup('127.0.0.1', options, callback);
-    const icon = await findIcon(`${bare.replace('127.0.0.1', 'app.test')}/`, { timeoutMs: TIMEOUT_MS, lookup });
-    assert.equal(icon.type, 'image/png');
+
+    // Finds the icon of a site on `from` that redirects everything to a site on `to` with an icon.
+    async function iconAfterRedirect(from, to) {
+      const target = (await site({ '/': page('<link rel="icon" href="/icon.png">'), '/icon.png': { body: PNG } })).replace('127.0.0.1', to);
+      const start = await site({ '/': { redirect: `${target}/` }, '/favicon.ico': { redirect: `${target}/icon.png` } });
+      return findIcon(`${start.replace('127.0.0.1', from)}/`, { timeoutMs: TIMEOUT_MS, lookup });
+    }
+
+    it('follows a redirect from a bare domain to its www. name', async () => {
+      assert.equal((await iconAfterRedirect('app.test', 'www.app.test'))?.type, 'image/png');
+    });
+
+    it('follows a redirect from a www. name to its bare domain', async () => {
+      assert.equal((await iconAfterRedirect('www.app.test', 'app.test'))?.type, 'image/png');
+    });
+
+    it('does not follow a redirect to another subdomain, such as a login page', async () => {
+      assert.equal(await iconAfterRedirect('app.test', 'login.app.test'), null);
+    });
   });
 
   it('does not follow a redirect to another host, such as a login page', async () => {

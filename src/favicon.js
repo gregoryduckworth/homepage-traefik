@@ -26,8 +26,9 @@ function sameSite(a, b) {
 }
 
 // Fetches a URL into a buffer, following redirects on the same host only (or between it and its www. name): a
-// redirect to another host is usually a login page, whose icon belongs to the login provider. Certificates aren't verified, because self-signed ones are
-// common on home labs and the result is only a picture; the server sends it with headers that stop it running script.
+// redirect to another host is usually a login page, whose icon belongs to the login provider. Certificates aren't
+// verified, because self-signed ones are common on home labs and the result is only a picture; the server sends it
+// with headers that stop it running script.
 // With `truncate`, a body over `maxBytes` is cut short rather than refused, which is enough to read a page's <head>.
 function get(url, { timeoutMs, lookup, maxBytes, truncate = false, redirects = MAX_REDIRECTS }) {
   return new Promise((resolve, reject) => {
