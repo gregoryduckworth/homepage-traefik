@@ -1,4 +1,5 @@
 const REFRESH_MS = 30000;
+const RECONNECT_MS = 5000;
 const CERT_ERROR = 'Certificate error';
 const FAILURE_LABELS = {
   TIMEOUT: 'Timed out',
@@ -745,10 +746,25 @@ els.themeToggle.addEventListener('click', () => {
 // catches up as soon as it's shown again.
 let changes = null;
 
-function listen() {
+// Changes made while the stream is down aren't sent again, so the page fetches everything once it's back. The
+// browser reconnects by itself after a network error, but gives up for good when the server answers with anything
+// other than an event stream, such as Traefik's 502 or 404 while the homepage container restarts. Then a new
+// stream is started a little later instead.
+function listen(catchUp = false) {
   if (changes || document.hidden || !window.EventSource) return;
-  changes = new EventSource('api/events');
-  changes.addEventListener('message', load);
+  const source = new EventSource('api/events');
+  changes = source;
+  source.addEventListener('message', load);
+  if (catchUp) source.addEventListener('open', load, { once: true });
+  source.addEventListener('error', () => {
+    if (changes !== source) return;
+    if (source.readyState === EventSource.CLOSED) {
+      changes = null;
+      setTimeout(() => listen(true), RECONNECT_MS);
+    } else {
+      source.addEventListener('open', load, { once: true });
+    }
+  });
 }
 
 els.filter.addEventListener('input', render);
