@@ -9,11 +9,11 @@ The app is a single Node.js process with no runtime dependencies.
 ## Quick start with Docker Compose
 
 ```sh
-touch homepage.json icons.json
+mkdir config
 docker compose up -d
 ```
 
-`homepage.json` is where the groups you make on the page are saved (see [Groups](#groups)), and `icons.json` keeps the icons found on your sites (see [Names and icons](#names-and-icons)). Then open <http://home.localhost>. The example `docker-compose.yml` starts Traefik, this homepage, and a `whoami` demo service, so you should see both `home.localhost` and `whoami.localhost` listed.
+The `config` folder is where the groups, names and icons you set on the page are saved, along with the icons found on your sites (see [Keeping your settings with your Compose project](#keeping-your-settings-with-your-compose-project)). On Linux, if your user's UID isn't 1000, also run `sudo chown 1000 config`. Then open <http://home.localhost>. The example `docker-compose.yml` starts Traefik, this homepage, and a `whoami` demo service, so you should see both `home.localhost` and `whoami.localhost` listed.
 
 ## Using the pre-built Docker image
 
@@ -35,8 +35,7 @@ services:
       TRAEFIK_API_URL: http://traefik:8080
       HOMEPAGE_TITLE: Home lab
     volumes:
-      - ./homepage.json:/app/config/homepage.json
-      - ./icons.json:/app/config/icons.json
+      - ./config:/app/config
     labels:
       - traefik.enable=true
       - traefik.http.routers.homepage.rule=Host(`home.example.com`)
@@ -100,7 +99,7 @@ services:
 
 Each route shows an icon beside its name. Once a route's health check succeeds, the server fetches its page and looks for an icon the way a browser does: an SVG icon, then an `apple-touch-icon`, then any other `<link rel="icon">` (largest first), then `/favicon.ico`. Icons are fetched from the homepage container, the same way as health checks, so `HEALTHCHECK_ADDRESS` applies to them too. They're looked up again after a day, or after an hour if none was found, and served to the page from `/api/icons/`. A new or changed icon shows up on open pages straight away, without a reload.
 
-The icons found are saved, base64-encoded, in `icons.json` beside `CONFIG_FILE`, so after a restart the page shows them straight away instead of looking every site up again. It's only a cache: deleting it just means the icons are looked up again. Mount it next to `homepage.json`, as the example compose file does, to keep it when the container is recreated, for example to upgrade it (see [Keeping the file with your Compose project](#keeping-the-file-with-your-compose-project)). Without a mount it's kept when the container restarts, but not when it's recreated.
+The icons found are saved, base64-encoded, in `icons.json` beside `CONFIG_FILE`, so after a restart the page shows them straight away instead of looking every site up again. It's only a cache: deleting it just means the icons are looked up again. It's in the same folder as `homepage.json`, so mounting that folder keeps both when the container is recreated, for example to upgrade it (see [Keeping your settings with your Compose project](#keeping-your-settings-with-your-compose-project)).
 
 - Redirects to another host aren't followed, because that's usually a login page whose icon would belong to your sign-in provider. A route behind authentication may get no icon, or its login page's icon if that's on the same host.
 - Certificates aren't checked when fetching icons, so routes with self-signed certificates still get one. Only images (PNG, ICO, GIF, JPEG, WebP or SVG, up to 256 KB) are used.
@@ -146,23 +145,23 @@ Groups are saved on the server, so everyone who opens the page sees the same lay
 
 Anyone who can open the homepage can change the groups, names and icons.
 
-### Keeping the file with your Compose project
+### Keeping your settings with your Compose project
 
-Mount the file into the container so it survives rebuilds and lives next to your `docker-compose.yml`, where you can back it up, commit it or copy it to another machine:
+Mount a `config` folder into the container so your settings survive rebuilds and live next to your `docker-compose.yml`, where you can back them up, commit them or copy them to another machine:
 
 ```yaml
     volumes:
-      - ./homepage.json:/app/config/homepage.json
-      - ./icons.json:/app/config/icons.json
+      - ./config:/app/config
 ```
 
-`icons.json` is optional: it keeps the icons found on your sites, so they show straight away after the container is recreated (see [Names and icons](#names-and-icons)).
+The server keeps two files in it, and creates them when it first needs them: `homepage.json` (your groups, names and icons, and the latest health checks) and `icons.json` (the icons found on your sites).
 
-- Create the files before the first `docker compose up`. Empty files are fine (`touch homepage.json icons.json`), and so are ones you've copied from another setup. If a file doesn't exist, Docker creates a directory with that name instead. The page tells you to replace `homepage.json` with a file, and the server's log says the same for `icons.json`. The same happens on Docker Desktop or Colima if the file is in a folder they don't share with Docker; both share your home folder by default.
-- The container runs as the `node` user (UID 1000), which needs to be able to write the files. If your host user has a different UID, run `chmod a+w homepage.json icons.json`, or set `user:` on the service to your own UID.
-- Some editors save by replacing the file rather than rewriting it, and a container keeps seeing the old one until it's recreated. If a hand edit doesn't show up, run `docker compose up -d --force-recreate homepage`.
+- Create the folder before the first `docker compose up` (`mkdir config`). To bring settings from another setup, copy its `homepage.json` into the folder.
+- The container runs as the `node` user (UID 1000), which needs to be able to write to the folder. On Linux, if your user's UID isn't 1000, run `sudo chown 1000 config`, or set `user:` on the service to your own UID. If the folder doesn't exist, Docker creates it owned by root, and changes made on the page fail with an error saying the file can't be written. Docker Desktop and Colima on a Mac don't need this, but the folder must be somewhere they share with Docker; both share your home folder by default.
 
-If you'd rather not keep the file in your project, mount a named volume on the whole directory instead (`homepage-config:/app/config`). Docker then creates the file for you.
+If you'd rather not keep the files in your project, mount a named volume instead (`homepage-config:/app/config`). Docker then creates the folder for you.
+
+Mounting `homepage.json` on its own (`./homepage.json:/app/config/homepage.json`), as older versions of this README did, still works. But the file has to exist before the container starts; otherwise Docker creates a directory in its place. The server has to overwrite it in place instead of replacing it in one step. And a hand edit from an editor that saves by replacing the file doesn't show up until the container is recreated. To switch to a folder, stop the container, run `mkdir config && mv homepage.json config/` (and `icons.json` too, if you mounted one), change the volume to `./config:/app/config` and run `docker compose up -d`.
 
 ## API
 
