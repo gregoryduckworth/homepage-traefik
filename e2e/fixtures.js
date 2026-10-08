@@ -8,14 +8,17 @@ const path = require('node:path');
 
 const SERVER = path.resolve(__dirname, '..', 'src', 'server.js');
 
-// A stand-in for the Traefik API. Tests change `routers`, or set `down`, to change what the homepage sees.
+// A stand-in for the Traefik API. Tests change `routers` or `tcpRouters`, or set `down`, to change what the homepage
+// sees.
 async function startTraefik(routers) {
-  const state = { routers, down: false };
+  const state = { routers, tcpRouters: [], down: false };
   const server = http.createServer((req, res) => {
     if (state.down) {
       res.writeHead(503).end();
     } else if (req.url.startsWith('/api/http/routers')) {
       res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(state.routers));
+    } else if (req.url.startsWith('/api/tcp/routers')) {
+      res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(state.tcpRouters));
     } else {
       res.writeHead(404).end();
     }
