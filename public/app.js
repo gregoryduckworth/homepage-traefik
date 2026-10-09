@@ -1,4 +1,4 @@
-import { putJson } from './api.js';
+import { newestOnly, putJson } from './api.js';
 import { watchChanges } from './changes.js';
 import { createDetails } from './details.js';
 import { createDragAndDrop } from './drag.js';
@@ -335,24 +335,24 @@ const drag = createDragAndDrop({
   onEnd: () => { if (renderPending) render(); },
 });
 
-// Loads can overlap, say a poll and the reload after saving a route, so only the newest response is used.
-let loadsStarted = 0;
-let loadApplied = 0;
+// Loads can overlap, say a poll and the reload after saving a route, so only the newest to finish is used, whether
+// it worked or not.
+const fetchRoutes = newestOnly(async () => {
+  const res = await fetch('api/routes', { cache: 'no-store' });
+  if (!res.ok) throw new Error(`The homepage server responded with HTTP ${res.status}`);
+  return res.json();
+});
 
 async function load() {
   const applyGroups = groups.startLoad();
-  const seq = ++loadsStarted;
-  try {
-    const res = await fetch('api/routes', { cache: 'no-store' });
-    if (!res.ok) throw new Error(`The homepage server responded with HTTP ${res.status}`);
-    const body = await res.json();
-    if (seq < loadApplied) return;
-    loadApplied = seq;
-    const { groups: loaded, ...rest } = body;
+  const outcome = await fetchRoutes();
+  if (!outcome) return;
+  if (outcome.error) {
+    data = { ...data, error: `Can't reach the homepage server. ${outcome.error.message}` };
+  } else {
+    const { groups: loaded, ...rest } = outcome.value;
     applyGroups(loaded || []);
     data = rest;
-  } catch (err) {
-    data = { ...data, error: `Can't reach the homepage server. ${err.message}` };
   }
   if (data.title) {
     els.title.textContent = data.title;

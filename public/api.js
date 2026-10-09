@@ -14,3 +14,17 @@ export function putJson(url, body) {
 export function post(url) {
   return send(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
 }
+
+// Wraps `task` so that when calls overlap, an older one that finishes after a newer one is dropped, as is one that
+// finishes after a newer one failed. Each call resolves to { value } or { error }, or to null when it was dropped.
+export function newestOnly(task) {
+  let started = 0;
+  let settled = 0;
+  return async () => {
+    const call = ++started;
+    const outcome = await task().then(value => ({ value }), error => ({ error }));
+    if (call < settled) return null;
+    settled = call;
+    return outcome;
+  };
+}
