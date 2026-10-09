@@ -247,12 +247,22 @@ async function main(env) {
   const { poll, check } = createPoller({ store, icons, events, saveIcons });
 
   const server = createServer({ store, config, title, version, icons, events, check, frameAncestors });
-  server.listen(port, () => console.log(`Homepage on :${port}, reading routes from ${traefikUrl} every ${pollSeconds}s, checking each route every ${healthSeconds}s, groups from ${configFile}`));
+  // Polling only starts once the server is listening. A port it can't listen on, such as one already in use, ends
+  // it with a sentence rather than Node's stack trace.
+  server.once('error', err => {
+    console.error(err.code === 'EADDRINUSE'
+      ? `Port ${port} is already in use. Stop whatever is using it, or set PORT to another port.`
+      : `Can't listen on port ${port} (${err.code || err.message})`);
+    process.exit(1);
+  });
+  server.listen(port, () => {
+    console.log(`Homepage on :${port}, reading routes from ${traefikUrl} every ${pollSeconds}s, checking each route every ${healthSeconds}s, groups from ${configFile}`);
+    poll();
+    setInterval(poll, pollSeconds * 1000).unref();
+  });
   for (const signal of ['SIGINT', 'SIGTERM']) {
     process.on(signal, () => shutDown({ server, events }).then(() => process.exit(0)));
   }
-  poll();
-  setInterval(poll, pollSeconds * 1000).unref();
 }
 
 if (require.main === module) main(process.env);

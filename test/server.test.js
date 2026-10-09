@@ -1,5 +1,6 @@
 const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert/strict');
+const { spawn } = require('node:child_process');
 const fs = require('node:fs/promises');
 const net = require('node:net');
 const { once } = require('node:events');
@@ -410,5 +411,30 @@ describe('frame ancestors', () => {
     } finally {
       server.close();
     }
+  });
+});
+
+describe('starting on a port that is in use', () => {
+  it('says so in a sentence and exits with an error', { timeout: 10000 }, async t => {
+    // On every address, as the server listens: holding only 127.0.0.1 would leave it free to listen on the rest.
+    const taken = net.createServer();
+    await new Promise(resolve => taken.listen(0, resolve));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'homepage-port-'));
+    t.after(async () => {
+      taken.close();
+      await fs.rm(dir, { recursive: true, force: true });
+    });
+    const { port } = taken.address();
+
+    const child = spawn(process.execPath, [path.join(__dirname, '..', 'src', 'server.js')], {
+      env: { ...process.env, PORT: String(port), TRAEFIK_API_URL: 'http://127.0.0.1:1', CONFIG_FILE: path.join(dir, 'homepage.json') },
+    });
+    t.after(() => child.kill());
+    let stderr = '';
+    child.stderr.on('data', chunk => { stderr += chunk; });
+    const [code] = await once(child, 'exit');
+
+    assert.equal(code, 1);
+    assert.equal(stderr.trim(), `Port ${port} is already in use. Stop whatever is using it, or set PORT to another port.`);
   });
 });
