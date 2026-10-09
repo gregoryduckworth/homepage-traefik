@@ -188,7 +188,7 @@ Apart from one line at startup, the server only logs when something goes wrong, 
 | `GET /api/events`               | Server-sent events, one message whenever anything on the page changes                                          |
 | `GET /healthz`                  | Liveness check                                                                                                 |
 
-`PUT` bodies are sent as `application/json`.
+`PUT` bodies, and `POST` requests, are sent as `application/json`.
 
 ## Development
 

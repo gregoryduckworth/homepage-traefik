@@ -134,8 +134,14 @@ function sendJson(res, status, body) {
   res.end(JSON.stringify(body));
 }
 
+// Browsers only send another site's request as application/json after asking the server first, which it never agrees
+// to, so requiring it means only the page itself can change things.
+function isJson(req) {
+  return /^application\/json\b/.test(req.headers['content-type'] || '');
+}
+
 async function readJson(req) {
-  if (!/^application\/json\b/.test(req.headers['content-type'] || '')) throw new ConfigError('Send the request body as application/json', 415);
+  if (!isJson(req)) throw new ConfigError('Send the request body as application/json', 415);
   const chunks = [];
   let size = 0;
   for await (const chunk of req) {
@@ -205,6 +211,14 @@ function pathParam(pathname, prefix) {
 // /api/check/<id>, which checks a route and looks up its icon now rather than when they're next due; it resolves to
 // the route with its new health, or null when there's nothing to check.
 function createServer({ store, config, title, version = null, icons = { get: () => null }, events = null, check = null, frameAncestors = "'self'" }) {
+  // Checks under way, by route id, so a route asked for again from another page waits for the same check.
+  const checks = new Map();
+
+  function checkOnce(id) {
+    if (!checks.has(id)) checks.set(id, check(id).finally(() => checks.delete(id)));
+    return checks.get(id);
+  }
+
   async function handle(req, res) {
     const { pathname } = new URL(req.url, 'http://localhost');
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -244,7 +258,11 @@ function createServer({ store, config, title, version = null, icons = { get: () 
         res.writeHead(405, { Allow: 'POST', 'Content-Type': 'text/plain' }).end('Method not allowed');
         return;
       }
-      const route = await check(pathParam(pathname, '/api/check/'));
+      if (!isJson(req)) {
+        sendJson(res, 415, { error: 'Send the request as application/json' });
+        return;
+      }
+      const route = await checkOnce(pathParam(pathname, '/api/check/'));
       if (route) sendJson(res, 200, { health: route.health });
       else sendJson(res, 404, { error: 'There’s no route by that name with an address to check' });
       return;

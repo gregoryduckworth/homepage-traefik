@@ -10,6 +10,7 @@ export function putJson(url, body) {
   return send(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 }
 
+// Sent as JSON, which the server requires so that other sites can't send it.
 export function post(url) {
-  return send(url, { method: 'POST' });
+  return send(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
 }
