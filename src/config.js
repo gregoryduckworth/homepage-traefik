@@ -70,9 +70,10 @@ function normalizeRouteSettings(input) {
     .filter(([, setting]) => setting));
 }
 
-// Saved health results are only a cache, so entries that don't look like one are dropped rather than reported.
-function storedHealth(doc) {
-  const entries = doc?.health && typeof doc.health === 'object' && !Array.isArray(doc.health) ? Object.entries(doc.health) : [];
+// Saved health results, keyed by route id. They're only a cache, so entries that don't look like one are dropped
+// rather than reported.
+function storedHealth(health) {
+  const entries = health && typeof health === 'object' && !Array.isArray(health) ? Object.entries(health) : [];
   return new Map(entries.filter(([, result]) => result && typeof result.url === 'string' && !Number.isNaN(Date.parse(result.checkedAt))));
 }
 
@@ -139,8 +140,9 @@ function createConfigStore({ file }) {
 
   // Writes `doc` and caches it along with the parsed fields it changed. Caching what was written rather than
   // re-reading it matters: two saves of the same size within the file system's timestamp resolution would otherwise
-  // look unchanged and return the earlier contents.
-  async function commit(current, doc, changed = {}) {
+  // look unchanged and return the earlier contents. Health checks used to be saved here and now have a file of
+  // their own, so any left from an older version are dropped.
+  async function commit(current, { health: _health, ...doc }, changed = {}) {
     try {
       await writeSafely(file, `${JSON.stringify(doc, null, 2)}\n`);
     } catch (err) {
@@ -176,18 +178,7 @@ function createConfigStore({ file }) {
     });
   }
 
-  // Stores the latest health check of each route beside the groups, so a restart can show them straight away
-  // and wait out the interval instead of checking every route again. A file that doesn't parse is left alone.
-  async function saveHealth(health) {
-    return queue(async () => {
-      const current = await read();
-      if (current.error) return false;
-      await commit(current, { ...current.doc, health });
-      return true;
-    });
-  }
-
-  return { file, read, saveGroups, saveRoute, saveHealth };
+  return { file, read, saveGroups, saveRoute };
 }
 
 module.exports = { ConfigError, normalizeGroups, normalizeRouteSettings, storedHealth, createConfigStore };
