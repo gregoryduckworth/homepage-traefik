@@ -175,6 +175,33 @@ describe('createConfigStore', () => {
     assert.deepEqual(groups, [{ name: 'Second', routes: [] }]);
   });
 
+  it('leaves the file alone when a save changes nothing in it', async () => {
+    await fs.mkdir(path.dirname(file));
+    // Written by hand, compactly: any write would replace it with the server's own formatting.
+    const text = '{"groups":[{"name":"Media","routes":["a@docker"]}],"routes":{"a@docker":{"name":"App"}}}';
+    await fs.writeFile(file, text);
+    const store = createConfigStore({ file });
+    assert.deepEqual(await store.saveGroups([{ name: 'Media', routes: ['a@docker'] }]), [{ name: 'Media', routes: ['a@docker'] }]);
+    assert.deepEqual(await store.saveRoute('a@docker', { name: 'App' }), { name: 'App' });
+    assert.equal(await store.saveRoute('b@docker', { name: '' }), null);
+    assert.equal(await fs.readFile(file, 'utf8'), text);
+    assert.deepEqual((await store.read()).routes, { 'a@docker': { name: 'App' } });
+  });
+
+  it('does not create the file for a save that changes nothing', async () => {
+    const store = createConfigStore({ file });
+    await store.saveRoute('a@docker', { hidden: false });
+    await assert.rejects(fs.stat(file), { code: 'ENOENT' });
+  });
+
+  it('writes the file once a save does change it', async () => {
+    await fs.mkdir(path.dirname(file));
+    await fs.writeFile(file, '{"groups":[]}');
+    const store = createConfigStore({ file });
+    await store.saveGroups([{ name: 'Media' }]);
+    assert.deepEqual(JSON.parse(await fs.readFile(file, 'utf8')), { groups: [{ name: 'Media', routes: [] }] });
+  });
+
   it('drops health results an older version saved in the file when saving a change', async () => {
     await fs.mkdir(path.dirname(file));
     const health = { 'a@docker': { url: 'http://a.test', reachable: true, checkedAt: '2026-01-01T00:00:00.000Z' } };

@@ -136,6 +136,9 @@ function createConfigStore({ file }) {
   // look unchanged and return the earlier contents. Older versions saved health checks here, which are no longer
   // kept, so any left over are dropped.
   async function commit(current, { health: _health, ...doc }, changed = {}) {
+    // A change that leaves the file as it was, such as saving a route's name unchanged, isn't written: that would
+    // only wear the disk, and reformat a file edited by hand.
+    if (JSON.stringify(doc) === JSON.stringify(current.doc)) return;
     try {
       await writeSafely(file, `${JSON.stringify(doc, null, 2)}\n`);
     } catch (err) {
