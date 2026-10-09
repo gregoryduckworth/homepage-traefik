@@ -29,7 +29,7 @@ Open <http://home.localhost>. You should see `home.localhost` and `whoami.localh
 ```yaml
 services:
   homepage:
-    image: ghcr.io/gregoryduckworth/homepage-traefik:main
+    image: ghcr.io/gregoryduckworth/homepage-traefik:latest
     environment:
       TRAEFIK_API_URL: http://traefik:8080
       HOMEPAGE_TITLE: Home lab
@@ -41,7 +41,16 @@ services:
       - traefik.http.services.homepage.loadbalancer.server.port=3000
 ```
 
-The `main` tag follows the latest commit. Each [release](https://github.com/gregoryduckworth/homepage-traefik/releases) (`v1.2.3`) is also published as `1.2.3` and `1.2`. Pin one of those if you'd rather choose when to upgrade; the release notes say what changed.
+Which image tag to use:
+
+| Tag      | What you get                                                                                                       |
+| -------- | ------------------------------------------------------------------------------------------------------------------ |
+| `latest` | The newest [release](https://github.com/gregoryduckworth/homepage-traefik/releases). Also what you get with no tag |
+| `1.2`    | The newest `1.2.x` release, so you get fixes but choose when to move to `1.3`                                      |
+| `1.2.3`  | Exactly that release                                                                                               |
+| `main`   | The latest commit on `main`, released or not                                                                       |
+
+The release notes say what changed. Docker doesn't fetch a newer image by itself: run `docker compose pull && docker compose up -d` to upgrade.
 
 ## Where routes come from
 
@@ -201,6 +210,6 @@ Run the **Release** workflow from the Actions tab, on `main`, and choose `patch`
 
 1. Tags the latest commit on `main` with the next version, such as `v1.2.4` after `v1.2.3`.
 2. Writes a GitHub release, with notes listing the pull requests merged since the last one.
-3. Starts the image build for the tag, which runs the tests and publishes `ghcr.io/gregoryduckworth/homepage-traefik:1.2.4` and `:1.2` for `amd64` and `arm64`.
+3. Starts the image build for the tag, which runs the tests and publishes `ghcr.io/gregoryduckworth/homepage-traefik:1.2.4`, `:1.2` and `:latest` for `amd64` and `arm64`.
 
 For the first release, choose `major` to get `1.0.0`. A commit that's already released can't be released again. Pushing a `v1.2.3` tag yourself still builds and publishes the image, but doesn't write a release.
