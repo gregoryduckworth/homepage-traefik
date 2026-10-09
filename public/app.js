@@ -1,8 +1,10 @@
-import { post, putJson } from './api.js';
+import { putJson } from './api.js';
 import { watchChanges } from './changes.js';
+import { createDetails } from './details.js';
 import { createDragAndDrop } from './drag.js';
-import { $, el, closeOnBackdrop, iconButton, INFO_ICON, RENAME_ICON, DELETE_ICON, UP_ICON, DOWN_ICON } from './dom.js';
-import { addressOf, byName, detailRows, displayName, groupKey, isHidden, matches, statusOf } from './routes.js';
+import { $, el, closeOnBackdrop, iconButton, plural, INFO_ICON, RENAME_ICON, DELETE_ICON, UP_ICON, DOWN_ICON } from './dom.js';
+import { createGroups, groupOf, withGroupMoved, withGroupShifted, withRouteMoved } from './groups.js';
+import { addressOf, byName, displayName, isHidden, sectionsFor, statusOf } from './routes.js';
 import './theme-toggle.js';
 
 const REFRESH_MS = 30000;
@@ -16,8 +18,6 @@ const els = {
   strip: $('strip'),
   routes: $('routes'),
   empty: $('empty'),
-  details: $('details'),
-  detailsGroup: $('details-group'),
   newGroup: $('new-group'),
   groupDialog: $('group-dialog'),
   groupForm: $('group-form'),
@@ -25,39 +25,24 @@ const els = {
   groupError: $('group-error'),
   groupSubmit: $('group-submit'),
   ungroupZone: $('ungroup-zone'),
-  routeDialog: $('route-dialog'),
-  routeForm: $('route-form'),
-  routeName: $('route-name'),
-  routeIcon: $('route-icon'),
-  routeError: $('route-error'),
-  routeSubmit: $('route-submit'),
-  detailsHide: $('details-hide'),
-  detailsCheck: $('details-check'),
-  detailsCheckError: $('details-check-error'),
   hiddenToggle: $('hidden-toggle'),
   footer: $('footer'),
   version: $('version'),
 };
 
-closeOnBackdrop(els.details);
 closeOnBackdrop(els.groupDialog);
-closeOnBackdrop(els.routeDialog);
 
-let data = { routes: [], groups: [], error: null, configError: null, updatedAt: null };
-let saveError = null;
-let saving = 0;
-// Bumped on every change made on this page, so a poll that started before the change can't undo it.
-let groupEdits = 0;
-// The groups the server last reported, which the page falls back to when a save fails.
-let confirmedGroups = [];
+// Everything from the server but the groups, which `groups` keeps.
+let data = { routes: [], error: null, configError: null, updatedAt: null };
+const groups = createGroups({
+  put: async list => (await putJson('api/groups', { groups: list })).groups,
+  onChange: render,
+  reload: load,
+});
 // Re-rendering mid-drag would detach the dragged element, so renders wait for the drop.
 let renderPending = false;
 // Hidden routes are left off the page, the strip and the summary until someone chooses to show them.
 let showHidden = false;
-let hideError = null;
-// Routes being checked on request, and why the last such check failed, if it did, as { id, message }.
-const checking = new Set();
-let checkError = null;
 
 // The routes the strip and the summary count: every route that isn't hidden.
 function watchedRoutes() {
@@ -130,7 +115,7 @@ function renderTile(route) {
   info.type = 'button';
   info.setAttribute('aria-label', `Details for ${displayName(route)}`);
   info.innerHTML = INFO_ICON;
-  info.addEventListener('click', () => openDetails(route.id));
+  info.addEventListener('click', () => details.open(route.id));
 
   tile.append(link, info);
   const item = el('li');
@@ -140,66 +125,6 @@ function renderTile(route) {
   item.addEventListener('dragend', drag.endDrag);
   item.append(tile);
   return item;
-}
-
-function fillDetails(route) {
-  const status = statusOf(route);
-  const dot = $('details-dot');
-  dot.parentElement.dataset.kind = status.kind;
-  dot.toggleAttribute('data-checking', status.kind === 'checking' || checking.has(route.id));
-  $('details-title').textContent = displayName(route);
-
-  const errors = $('details-errors');
-  errors.replaceChildren(...route.errors.map(message => el('p', null, message)));
-  errors.hidden = !route.errors.length;
-
-  $('details-list').replaceChildren(...detailRows(route).flatMap(([term, value, format]) => {
-    const dd = el('dd');
-    dd.append(format === 'code' ? el('code', null, value) : String(value));
-    return [el('dt', null, term), dd];
-  }));
-
-  const current = groupOf(route.id);
-  els.detailsGroup.replaceChildren(new Option('None', ''), ...data.groups.map(group => new Option(group.name, group.name)));
-  els.detailsGroup.value = current ? current.name : '';
-  els.detailsGroup.parentElement.hidden = !data.groups.length;
-
-  els.detailsHide.textContent = isHidden(route) ? 'Show route' : 'Hide route';
-
-  // Only routes the server checks can be checked now: disabled routes and those with no web address never are. While
-  // a check runs the button stays focusable, so a keyboard user isn't thrown out of the dialog, but does nothing.
-  const busy = checking.has(route.id);
-  els.detailsCheck.hidden = !route.url || route.status === 'disabled';
-  els.detailsCheck.textContent = busy ? 'Checking…' : 'Check now';
-  els.detailsCheck.setAttribute('aria-disabled', String(busy));
-  const error = checkError?.id === route.id ? checkError.message : null;
-  els.detailsCheckError.textContent = error;
-  els.detailsCheckError.hidden = !error;
-
-  const open = $('details-open');
-  open.hidden = !route.url;
-  if (route.url) {
-    open.href = route.url;
-    open.textContent = `Open ${addressOf(route)}`;
-  }
-}
-
-let detailsId = null;
-
-function openDetails(id) {
-  const route = data.routes.find(r => r.id === id);
-  if (!route) return;
-  detailsId = id;
-  if (checkError?.id !== id) checkError = null;
-  fillDetails(route);
-  els.details.showModal();
-}
-
-function refreshDetails() {
-  if (!els.details.open) return;
-  const route = data.routes.find(r => r.id === detailsId);
-  if (route) fillDetails(route);
-  else els.details.close();
 }
 
 function renderStrip() {
@@ -222,20 +147,15 @@ function summaryText() {
   const kinds = watched.map(route => statusOf(route).kind);
   const up = kinds.filter(kind => kind === 'up').length;
   const problems = kinds.filter(kind => kind === 'down' || kind === 'warn').length;
-  const parts = [`${up} of ${count} ${count === 1 ? 'route' : 'routes'} up`];
-  if (problems) parts.push(`${problems} ${problems === 1 ? 'needs' : 'need'} attention`);
+  const parts = [`${up} of ${plural(count, 'route')} up`];
+  if (problems) parts.push(`${plural(problems, 'needs', 'need')} attention`);
   if (hidden) parts.push(`${hidden} hidden`);
   return parts.join(', ');
 }
 
-function groupOf(id) {
-  return data.groups.find(group => group.routes.includes(id));
-}
-
 // Custom groups get buttons to move, rename and delete them, and can be dragged by their heading; entry point
-// groups are where ungrouped routes land.
-// `hiddenCount` is how many of a custom group's routes are hidden and not shown.
-function renderSection(title, routes, group, hiddenCount = 0) {
+// groups are where ungrouped routes land. A section is as sectionsFor lists it.
+function renderSection({ title, routes, group, hidden: hiddenCount }) {
   const section = el('section', 'group');
   const head = el('div', 'group-head');
   const heading = el('h2', null, `${title} `);
@@ -248,13 +168,13 @@ function renderSection(title, routes, group, hiddenCount = 0) {
     head.draggable = true;
     head.addEventListener('dragstart', event => drag.startGroupDrag(event, section));
     head.addEventListener('dragend', drag.endDrag);
-    if (data.groups.length > 1) {
-      const index = data.groups.indexOf(group);
+    if (groups.list.length > 1) {
+      const index = groups.list.indexOf(group);
       const up = iconButton(UP_ICON, `Move ${group.name} up`, () => shiftGroup(group.name, -1));
       const down = iconButton(DOWN_ICON, `Move ${group.name} down`, () => shiftGroup(group.name, 1));
       up.dataset.move = down.dataset.move = '';
       up.disabled = index === 0;
-      down.disabled = index === data.groups.length - 1;
+      down.disabled = index === groups.list.length - 1;
       head.append(up, down);
     }
     head.append(
@@ -264,7 +184,7 @@ function renderSection(title, routes, group, hiddenCount = 0) {
   }
   if (group && !routes.length) {
     section.append(el('p', 'group-empty', hiddenCount
-      ? `Every route in this group is hidden. Select “Show ${hiddenCount} hidden ${hiddenCount === 1 ? 'route' : 'routes'}” to see ${hiddenCount === 1 ? 'it' : 'them'}.`
+      ? `Every route in this group is hidden. Select “Show ${plural(hiddenCount, 'hidden route')}” to see ${hiddenCount === 1 ? 'it' : 'them'}.`
       : 'Drag routes here, or choose this group in a route’s details.'));
   } else {
     const list = el('ul', 'tiles');
@@ -278,8 +198,8 @@ function renderNotice() {
   const notices = [];
   if (data.error) notices.push([data.routes.length ? 'Showing the last routes we could load' : 'No routes loaded', data.error]);
   if (data.configError) notices.push(['Groups couldn’t be loaded from the config file', data.configError]);
-  if (saveError) notices.push(['Your group change wasn’t saved', saveError]);
-  if (hideError) notices.push(['The route wasn’t hidden or shown', hideError]);
+  if (groups.error) notices.push(['Your group change wasn’t saved', groups.error]);
+  if (details.hideError) notices.push(['The route wasn’t hidden or shown', details.hideError]);
   els.notice.replaceChildren(...notices.map(([heading, text]) => {
     const item = el('p');
     item.append(el('strong', null, heading), text);
@@ -298,40 +218,17 @@ function render() {
   const hiddenCount = data.routes.filter(isHidden).length;
   // Once nothing is hidden, the next route hidden should leave the page rather than stay on it dimmed.
   if (!hiddenCount) showHidden = false;
-  const visible = data.routes.filter(route => (showHidden || !isHidden(route)) && matches(route, query)).sort(byName);
-  const byId = new Map(visible.map(route => [route.id, route]));
-  const assigned = new Set(data.groups.flatMap(group => group.routes));
-
-  // Configured routes that Traefik isn't serving right now stay in the file and reappear when they come back.
-  const custom = data.groups
-    .map(group => ({
-      group,
-      routes: group.routes.map(id => byId.get(id)).filter(Boolean),
-      hidden: showHidden ? 0 : data.routes.filter(route => isHidden(route) && group.routes.includes(route.id)).length,
-    }))
-    .filter(({ routes }) => routes.length || !query);
-
-  const groups = new Map();
-  for (const route of visible) {
-    if (assigned.has(route.id)) continue;
-    const key = groupKey(route);
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(route);
-  }
-  const keys = [...groups.keys()].sort((a, b) => groups.get(b).length - groups.get(a).length || a.localeCompare(b));
+  const { shown: visible, sections } = sectionsFor(data.routes, groups.list, { query, showHidden });
 
   // Rebuilding the list drops focus, so put it back on the button with the same label.
   const focused = els.routes.contains(document.activeElement) ? document.activeElement.getAttribute('aria-label') : null;
-  els.routes.replaceChildren(
-    ...custom.map(({ group, routes, hidden }) => renderSection(group.name, routes, group, hidden)),
-    ...keys.map(key => renderSection(key, groups.get(key))),
-  );
+  els.routes.replaceChildren(...sections.map(renderSection));
   if (focused) [...els.routes.querySelectorAll('[aria-label]')].find(node => node.getAttribute('aria-label') === focused)?.focus();
 
   renderNotice();
 
   renderStrip();
-  refreshDetails();
+  details.refresh();
 
   const count = data.routes.length;
   if (!data.updatedAt && !data.error) {
@@ -348,7 +245,7 @@ function render() {
   els.hiddenToggle.hidden = !hiddenCount;
   els.hiddenToggle.textContent = showHidden
     ? 'Stop showing hidden routes'
-    : `Show ${hiddenCount} hidden ${hiddenCount === 1 ? 'route' : 'routes'}`;
+    : `Show ${plural(hiddenCount, 'hidden route')}`;
 
   els.empty.hidden = true;
   if (data.updatedAt && !count) {
@@ -363,77 +260,28 @@ function render() {
   }
 }
 
-// Saving is optimistic: the page shows the change at once. If the server refuses it, the page goes back to the
-// groups the server last confirmed and reloads them, which stays correct even when several saves were in flight.
-async function saveGroups(groups) {
-  if (JSON.stringify(groups) === JSON.stringify(data.groups)) return;
-  data.groups = groups;
-  saveError = null;
-  saving++;
-  groupEdits++;
-  render();
-  let failed = false;
-  try {
-    const body = await putJson('api/groups', { groups });
-    confirmedGroups = body.groups;
-    // A later save still in flight holds newer groups than this response. Once none is, the server has every
-    // change made on the page, including any whose own save failed, so an earlier error no longer applies.
-    if (saving === 1) {
-      data.groups = body.groups;
-      saveError = null;
-    }
-  } catch (err) {
-    failed = true;
-    saveError = err.message;
-  } finally {
-    saving--;
-  }
-  // A save still in flight settles the groups itself when it finishes.
-  if (failed && !saving) {
-    data.groups = confirmedGroups;
-    await load();
-  } else {
-    render();
-  }
-}
-
 function moveRoute(id, target, beforeId) {
   if (id === beforeId) return;
-  const groups = data.groups.map(group => ({ ...group, routes: group.routes.filter(routeId => routeId !== id) }));
-  const group = groups.find(g => g.name === target);
-  if (group) {
-    const index = beforeId ? group.routes.indexOf(beforeId) : -1;
-    group.routes.splice(index < 0 ? group.routes.length : index, 0, id);
-  }
-  saveGroups(groups);
+  groups.save(withRouteMoved(groups.list, id, target, beforeId));
 }
 
-// Puts a group in front of another one, or last when there's no other one.
 function moveGroup(name, beforeName) {
-  const group = data.groups.find(g => g.name === name);
-  if (!group || name === beforeName) return;
-  const groups = data.groups.filter(g => g !== group);
-  const index = beforeName ? groups.findIndex(g => g.name === beforeName) : -1;
-  groups.splice(index < 0 ? groups.length : index, 0, group);
-  saveGroups(groups);
+  groups.save(withGroupMoved(groups.list, name, beforeName));
 }
 
 // Moves a group one place up or down. Rendering keeps focus on the pressed button, unless the group reached the
 // top or bottom and the button is now disabled; then focus goes to the group's other arrow.
 function shiftGroup(name, step) {
-  const index = data.groups.findIndex(g => g.name === name);
-  const target = index + step;
-  if (index < 0 || target < 0 || target >= data.groups.length) return;
-  moveGroup(name, data.groups[step < 0 ? target : target + 1]?.name ?? null);
+  groups.save(withGroupShifted(groups.list, name, step));
   if (els.routes.contains(document.activeElement)) return;
   const section = [...els.routes.querySelectorAll('.group[data-group]')].find(s => s.dataset.group === name);
   section?.querySelector('[data-move]:enabled')?.focus();
 }
 
 function deleteGroup(name) {
-  const group = data.groups.find(g => g.name === name);
+  const group = groups.list.find(g => g.name === name);
   if (group.routes.length && !confirm(`Delete the “${name}” group? Its routes go back to their entry point groups.`)) return;
-  saveGroups(data.groups.filter(g => g !== group));
+  groups.save(groups.list.filter(g => g !== group));
 }
 
 let renamingGroup = null;
@@ -449,109 +297,39 @@ function openGroupDialog(name = null) {
 
 els.groupForm.addEventListener('submit', event => {
   const name = els.groupName.value.trim();
-  const taken = data.groups.find(group => group.name.toLowerCase() === name.toLowerCase() && group.name !== renamingGroup);
+  const taken = groups.list.find(group => group.name.toLowerCase() === name.toLowerCase() && group.name !== renamingGroup);
   if (!name || taken) {
     event.preventDefault();
     els.groupError.textContent = taken ? `There’s already a group called “${taken.name}”.` : 'Enter a name for the group.';
     els.groupError.hidden = false;
     return;
   }
-  saveGroups(renamingGroup
-    ? data.groups.map(group => (group.name === renamingGroup ? { ...group, name } : group))
-    : [...data.groups, { name, routes: [] }]);
+  groups.save(renamingGroup
+    ? groups.list.map(group => (group.name === renamingGroup ? { ...group, name } : group))
+    : [...groups.list, { name, routes: [] }]);
 });
 
 els.newGroup.addEventListener('click', () => openGroupDialog());
-
-// Names and icons are saved one route at a time, and the dialog stays open until the server has the change.
-let editingRoute = null;
-
-function openRouteDialog() {
-  const route = data.routes.find(r => r.id === detailsId);
-  if (!route) return;
-  editingRoute = route.id;
-  els.routeName.value = route.custom?.name || '';
-  els.routeName.placeholder = route.name;
-  els.routeIcon.value = route.custom?.icon || '';
-  els.routeIcon.placeholder = route.icon ? 'The site’s own icon' : 'https://…';
-  els.routeError.hidden = true;
-  els.routeSubmit.disabled = false;
-  els.routeDialog.showModal();
-}
-
-els.routeForm.addEventListener('submit', async event => {
-  event.preventDefault();
-  const id = editingRoute;
-  els.routeSubmit.disabled = true;
-  try {
-    const body = await putJson(`api/routes/${encodeURIComponent(id)}`, { name: els.routeName.value, icon: els.routeIcon.value });
-    const route = data.routes.find(r => r.id === id);
-    if (route) route.custom = body.custom;
-    els.routeDialog.close();
-    render();
-    load();
-  } catch (err) {
-    els.routeError.textContent = err.message;
-    els.routeError.hidden = false;
-    els.routeSubmit.disabled = false;
-  }
-});
-
-$('details-edit').addEventListener('click', openRouteDialog);
-
-// Only "hidden" is sent, so the route keeps its name and icon. A route that's hidden while hidden routes aren't
-// shown leaves the page, so its details close too.
-els.detailsHide.addEventListener('click', async () => {
-  const id = detailsId;
-  const route = data.routes.find(r => r.id === id);
-  if (!route) return;
-  const hidden = !isHidden(route);
-  els.detailsHide.disabled = true;
-  try {
-    const body = await putJson(`api/routes/${encodeURIComponent(id)}`, { hidden });
-    route.custom = body.custom;
-    hideError = null;
-    if (hidden && !showHidden) els.details.close();
-  } catch (err) {
-    hideError = err.message;
-  } finally {
-    els.detailsHide.disabled = false;
-  }
-  render();
-  load();
-});
-
-// Checks the route and looks up its icon straight away, rather than when they're next due. The server answers once
-// both are done, and the page then shows what they found.
-els.detailsCheck.addEventListener('click', async () => {
-  const id = detailsId;
-  if (checking.has(id)) return;
-  checking.add(id);
-  checkError = null;
-  refreshDetails();
-  try {
-    await post(`api/check/${encodeURIComponent(id)}`);
-  } catch (err) {
-    checkError = { id, message: `The route wasn’t checked. ${err.message}` };
-  } finally {
-    checking.delete(id);
-  }
-  await load();
-});
 
 els.hiddenToggle.addEventListener('click', () => {
   showHidden = !showHidden;
   render();
 });
-$('route-cancel').addEventListener('click', () => els.routeDialog.close());
 $('group-cancel').addEventListener('click', () => els.groupDialog.close());
-els.detailsGroup.addEventListener('change', () => moveRoute(detailsId, els.detailsGroup.value || null));
+const details = createDetails({
+  routeOf: id => data.routes.find(route => route.id === id),
+  groups: () => groups.list,
+  moveRoute,
+  showingHidden: () => showHidden,
+  render,
+  load,
+});
 
 const drag = createDragAndDrop({
   routes: els.routes,
   ungroupZone: els.ungroupZone,
-  groups: () => data.groups,
-  groupOf,
+  groups: () => groups.list,
+  groupOf: id => groupOf(groups.list, id),
   moveRoute,
   moveGroup,
   onEnd: () => { if (renderPending) render(); },
@@ -562,7 +340,7 @@ let loadsStarted = 0;
 let loadApplied = 0;
 
 async function load() {
-  const edits = groupEdits;
+  const applyGroups = groups.startLoad();
   const seq = ++loadsStarted;
   try {
     const res = await fetch('api/routes', { cache: 'no-store' });
@@ -570,10 +348,9 @@ async function load() {
     const body = await res.json();
     if (seq < loadApplied) return;
     loadApplied = seq;
-    // Keep this page's groups if it changed them while the request was out: the response may predate the change.
-    const stale = saving || edits !== groupEdits;
-    if (!stale) confirmedGroups = body.groups || [];
-    data = { ...body, groups: stale ? data.groups : confirmedGroups };
+    const { groups: loaded, ...rest } = body;
+    applyGroups(loaded || []);
+    data = rest;
   } catch (err) {
     data = { ...data, error: `Can't reach the homepage server. ${err.message}` };
   }

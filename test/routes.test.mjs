@@ -2,7 +2,7 @@
 // Node has to work out that it's an ES module, which the test scripts don't warn about.
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { addressOf, byName, detailRows, displayName, groupKey, isHidden, matches, statusOf } from '../public/routes.js';
+import { addressOf, byName, detailRows, displayName, groupKey, isHidden, matches, sectionsFor, statusOf } from '../public/routes.js';
 
 function route(fields = {}) {
   return {
@@ -146,5 +146,60 @@ describe('detailRows', () => {
   it('shows the rule as code', () => {
     const rule = detailRows(route()).find(([term]) => term === 'Rule');
     assert.deepEqual(rule, ['Rule', 'Host(`app.lab`)', 'code']);
+  });
+});
+
+describe('sectionsFor', () => {
+  const jellyfin = route({ id: 'jellyfin', name: 'jellyfin', host: 'jellyfin.lab', entryPoints: ['web'] });
+  const sonarr = route({ id: 'sonarr', name: 'sonarr', host: 'sonarr.lab', entryPoints: ['web'] });
+  const grafana = route({ id: 'grafana', name: 'grafana', host: 'grafana.lab', entryPoints: ['websecure'] });
+  const radarr = route({ id: 'radarr', name: 'radarr', host: 'radarr.lab', entryPoints: ['web'], custom: { hidden: true } });
+  const routes = [sonarr, grafana, jellyfin, radarr];
+  const titles = ({ sections }) => sections.map(section => section.title);
+
+  it('lists custom groups first, then the other routes by entry point, the biggest first', () => {
+    const groups = [{ name: 'Monitoring', routes: ['grafana'] }];
+    assert.deepEqual(titles(sectionsFor(routes, groups)), ['Monitoring', 'web']);
+  });
+
+  it('lists entry point groups of the same size by name', () => {
+    assert.deepEqual(titles(sectionsFor([grafana, jellyfin], [])), ['web', 'websecure']);
+  });
+
+  it('keeps a custom group\'s routes in the group\'s order', () => {
+    const groups = [{ name: 'Media', routes: ['sonarr', 'jellyfin'] }];
+    assert.deepEqual(sectionsFor(routes, groups).sections[0].routes, [sonarr, jellyfin]);
+  });
+
+  it('lists entry point groups by name', () => {
+    assert.deepEqual(sectionsFor(routes, []).sections[0].routes, [jellyfin, sonarr]);
+  });
+
+  it('leaves out routes in a group that Traefik is not serving', () => {
+    const groups = [{ name: 'Media', routes: ['plex', 'jellyfin'] }];
+    assert.deepEqual(sectionsFor(routes, groups).sections[0].routes, [jellyfin]);
+  });
+
+  it('leaves out hidden routes, counting them against their group', () => {
+    const groups = [{ name: 'Media', routes: ['radarr'] }];
+    assert.deepEqual(sectionsFor(routes, groups).sections[0], { title: 'Media', group: groups[0], routes: [], hidden: 1 });
+  });
+
+  it('lists hidden routes while they are shown', () => {
+    const groups = [{ name: 'Media', routes: ['radarr'] }];
+    assert.deepEqual(sectionsFor(routes, groups, { showHidden: true }).sections[0].routes, [radarr]);
+  });
+
+  it('keeps an empty custom group when not searching', () => {
+    assert.deepEqual(titles(sectionsFor(routes, [{ name: 'Empty', routes: [] }])), ['Empty', 'web', 'websecure']);
+  });
+
+  it('leaves out custom groups with no match while searching', () => {
+    const groups = [{ name: 'Media', routes: ['jellyfin'] }, { name: 'Monitoring', routes: ['grafana'] }];
+    assert.deepEqual(titles(sectionsFor(routes, groups, { query: 'graf' })), ['Monitoring']);
+  });
+
+  it('gives every route shown, by name', () => {
+    assert.deepEqual(sectionsFor(routes, [], { query: 'arr' }).shown, [sonarr]);
   });
 });

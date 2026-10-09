@@ -1,4 +1,4 @@
-// What the page says about a route, worked out from the route alone.
+// What the page says about routes and how it lists them, worked out from the routes alone.
 
 const FAILURE_LABELS = {
   TIMEOUT: 'Timed out',
@@ -105,4 +105,37 @@ export function detailRows(route) {
     ['TLS', tlsText(route)],
     ['Priority', route.priority],
   ].filter(([, value]) => value != null && value !== '');
+}
+
+// What the page lists, in order: each custom group, then the routes in no group by entry point, the biggest first. A
+// route is shown unless it's hidden, while hidden routes aren't shown, or doesn't match `query`. Routes in a custom
+// group that Traefik isn't serving right now are left out, and come back when it serves them again. While
+// searching, custom groups with no matches are left out too. Each section's `hidden` counts the routes in it that
+// are hidden and not shown. `shown` is every route shown, by name.
+export function sectionsFor(routes, groups, { query = '', showHidden = false } = {}) {
+  const shown = routes.filter(route => (showHidden || !isHidden(route)) && matches(route, query)).sort(byName);
+  const byId = new Map(shown.map(route => [route.id, route]));
+  const assigned = new Set(groups.flatMap(group => group.routes));
+
+  const custom = groups
+    .map(group => ({
+      title: group.name,
+      group,
+      routes: group.routes.map(id => byId.get(id)).filter(Boolean),
+      hidden: showHidden ? 0 : routes.filter(route => isHidden(route) && group.routes.includes(route.id)).length,
+    }))
+    .filter(section => section.routes.length || !query);
+
+  const byKey = new Map();
+  for (const route of shown) {
+    if (assigned.has(route.id)) continue;
+    const key = groupKey(route);
+    if (!byKey.has(key)) byKey.set(key, []);
+    byKey.get(key).push(route);
+  }
+  const entryPoints = [...byKey]
+    .sort(([a, x], [b, y]) => y.length - x.length || a.localeCompare(b))
+    .map(([key, list]) => ({ title: key, group: null, routes: list, hidden: 0 }));
+
+  return { shown, sections: [...custom, ...entryPoints] };
 }
