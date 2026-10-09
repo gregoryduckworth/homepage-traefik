@@ -87,14 +87,16 @@ function createRouteStore({
     if (!route || !isCheckable(route)) return null;
     const result = (await checkRoutes([route], healthOptions)).get(id);
     if (result) setResult(route, result);
-    return { ...route, health: healthResults.get(id) || null };
+    return withHealth(route);
+  }
+
+  // The route with its latest health check, or null health when it hasn't been checked.
+  function withHealth(route) {
+    return { ...route, health: healthResults.get(route.id) || null };
   }
 
   function getRoutesWithHealth() {
-    return state.routes.map(route => {
-      const health = healthResults.get(route.id);
-      return { ...route, health: health || null };
-    });
+    return state.routes.map(withHealth);
   }
 
   return { state, refresh, refreshHealth, checkRoute, getRoutesWithHealth };
