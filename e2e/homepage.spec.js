@@ -88,6 +88,24 @@ test('a route can be renamed, and goes back to its router name when cleared', as
   await expect(details(page, 'grafana')).toBeVisible();
 });
 
+test('a hidden route leaves the page until hidden routes are shown', async ({ page }) => {
+  await details(page, 'jellyfin').click();
+  await page.getByRole('button', { name: 'Hide route' }).click();
+  await expect(details(page, 'jellyfin')).toHaveCount(0);
+
+  const toggle = page.getByRole('button', { name: 'Show 1 hidden route' });
+  await toggle.click();
+  await expect(details(page, 'jellyfin')).toBeVisible();
+  await details(page, 'jellyfin').click();
+  await page.getByRole('button', { name: 'Show route' }).click();
+  await expect(page.getByRole('button', { name: /hidden route/ })).toBeHidden();
+});
+
+test('pressing / jumps to the search box', async ({ page }) => {
+  await page.keyboard.press('/');
+  await expect(page.getByRole('searchbox', { name: 'Search routes' })).toBeFocused();
+});
+
 test('a route added to Traefik shows up without reloading the page', async ({ page, traefik }) => {
   traefik.state.routers.push({ name: 'radarr@docker', rule: 'Host(`radarr.test`)', entryPoints: ['web'], status: 'enabled' });
   await expect(details(page, 'radarr')).toBeVisible({ timeout: 15000 });

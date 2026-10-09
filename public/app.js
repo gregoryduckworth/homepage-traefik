@@ -1,25 +1,11 @@
-const REFRESH_MS = 30000;
-const RECONNECT_MS = 5000;
-const CERT_ERROR = 'Certificate error';
-const FAILURE_LABELS = {
-  TIMEOUT: 'Timed out',
-  ENOTFOUND: 'DNS failed',
-  EAI_AGAIN: 'DNS failed',
-  ECONNREFUSED: 'Refused',
-  ECONNRESET: 'Reset',
-  EHOSTUNREACH: 'Unreachable',
-  ENETUNREACH: 'Unreachable',
-  DEPTH_ZERO_SELF_SIGNED_CERT: CERT_ERROR,
-  SELF_SIGNED_CERT_IN_CHAIN: CERT_ERROR,
-  UNABLE_TO_VERIFY_LEAF_SIGNATURE: CERT_ERROR,
-  UNABLE_TO_GET_ISSUER_CERT: CERT_ERROR,
-  UNABLE_TO_GET_ISSUER_CERT_LOCALLY: CERT_ERROR,
-  CERT_HAS_EXPIRED: CERT_ERROR,
-  CERT_NOT_YET_VALID: CERT_ERROR,
-  ERR_TLS_CERT_ALTNAME_INVALID: CERT_ERROR,
-};
+import { putJson } from './api.js';
+import { watchChanges } from './changes.js';
+import { $, el, closeOnBackdrop, iconButton, INFO_ICON, RENAME_ICON, DELETE_ICON, UP_ICON, DOWN_ICON } from './dom.js';
+import { addressOf, byName, detailRows, displayName, groupKey, isHidden, matches, statusOf } from './routes.js';
+import './theme-toggle.js';
 
-const $ = id => document.getElementById(id);
+const REFRESH_MS = 30000;
+
 const els = {
   title: $('title'),
   summary: $('summary'),
@@ -28,7 +14,6 @@ const els = {
   strip: $('strip'),
   routes: $('routes'),
   empty: $('empty'),
-  themeToggle: $('theme-toggle'),
   details: $('details'),
   detailsGroup: $('details-group'),
   newGroup: $('new-group'),
@@ -48,23 +33,9 @@ const els = {
   hiddenToggle: $('hidden-toggle'),
 };
 
-const INFO_ICON = '<svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/></svg>';
-const RENAME_ICON = '<svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z"/></svg>';
-const DELETE_ICON = '<svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>';
-const UP_ICON = '<svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M14.707 12.707a1 1 0 01-1.414 0L10 9.414l-3.293 3.293a1 1 0 01-1.414-1.414l4-4a1 1 0 011.414 0l4 4a1 1 0 010 1.414z" clip-rule="evenodd"/></svg>';
-const DOWN_ICON = '<svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd"/></svg>';
 const DRAG_TYPE = 'application/x-homepage-route';
 const GROUP_DRAG_TYPE = 'application/x-homepage-group';
 
-// Backdrop clicks also target the dialog, as do clicks in its children's margins, so close only when outside its box.
-function closeOnBackdrop(dialog) {
-  dialog.addEventListener('click', event => {
-    if (event.target !== dialog) return;
-    const box = dialog.getBoundingClientRect();
-    const inside = event.clientX >= box.left && event.clientX <= box.right && event.clientY >= box.top && event.clientY <= box.bottom;
-    if (!inside) dialog.close();
-  });
-}
 closeOnBackdrop(els.details);
 closeOnBackdrop(els.groupDialog);
 closeOnBackdrop(els.routeDialog);
@@ -85,64 +56,9 @@ let renderPending = false;
 let showHidden = false;
 let hideError = null;
 
-function el(tag, className, text) {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  if (text != null) node.textContent = text;
-  return node;
-}
-
-function groupKey(route) {
-  return route.entryPoints.length ? route.entryPoints.join(' + ') : 'default';
-}
-
-function matches(route, query) {
-  if (!query) return true;
-  return [route.custom?.name, route.host, route.path, route.service, route.name, route.rule]
-    .some(value => value && value.toLowerCase().includes(query));
-}
-
-function failureLabel({ error, phase }) {
-  if (FAILURE_LABELS[error]) return FAILURE_LABELS[error];
-  return phase === 'tls' || error?.startsWith('ERR_SSL') ? 'TLS error' : 'Down';
-}
-
-// Traefik's router status wins over the probe: a disabled router can't be up.
-function statusOf(route) {
-  if (route.status === 'disabled') return { kind: 'off', label: 'Disabled' };
-  if (route.status === 'warning') return { kind: 'warn', label: 'Warning' };
-  if (route.protocol === 'tcp') return { kind: 'off', label: 'TCP' };
-  if (!route.url) return { kind: 'off', label: 'No link' };
-  if (!route.health) return { kind: 'checking', label: 'Checking' };
-  if (!route.health.reachable) return { kind: 'down', label: failureLabel(route.health) };
-  if (route.health.statusCode >= 500) return { kind: 'down', label: `HTTP ${route.health.statusCode}` };
-  // Traefik's own 404: the check didn't reach the route, though the route may still work in a browser.
-  if (route.health.unrouted) return { kind: 'warn', label: 'No router' };
-  return { kind: 'up', label: 'Up' };
-}
-
-// A name set on the page wins over the router name, which reads better than the hostname.
-function displayName(route) {
-  return route.custom?.name || route.name;
-}
-
-function isHidden(route) {
-  return Boolean(route.custom?.hidden);
-}
-
 // The routes the strip and the summary count: every route that isn't hidden.
 function watchedRoutes() {
   return data.routes.filter(route => !isHidden(route));
-}
-
-// A TCP route has no link, but its HostSNI hostname is still the address people know it by.
-function addressOf(route) {
-  if (route.protocol === 'tcp') return route.host;
-  return route.url ? `${route.host}${route.port ? `:${route.port}` : ''}${route.path}` : null;
-}
-
-function byName(a, b) {
-  return displayName(a).localeCompare(displayName(b), undefined, { sensitivity: 'base', numeric: true });
 }
 
 // An icon set on the page, else the one the server found on the site, else the name's first letter; an image that
@@ -217,53 +133,6 @@ function renderTile(route) {
   item.addEventListener('dragend', endDrag);
   item.append(tile);
   return item;
-}
-
-function timeOf(iso) {
-  return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-}
-
-function healthText(route) {
-  const health = route.health;
-  if (route.status === 'disabled') return 'Not checked while the router is disabled';
-  if (route.protocol === 'tcp') return 'Not checked: TCP routes have no web address to request';
-  if (!route.url) return 'Not checked: the rule has no Host to request';
-  if (!health) return 'Waiting for the first check';
-  if (!health.reachable) return `${health.detail || 'The request failed.'} (${health.error})`;
-  if (health.unrouted) return health.detail;
-  return `HTTP ${health.statusCode} in ${health.latencyMs} ms`;
-}
-
-function attemptText(health) {
-  if (!health?.method) return null;
-  return health.attempts > 1 ? 'HEAD, then retried with GET' : health.method;
-}
-
-function tlsText(route) {
-  if (!route.tls) return 'No';
-  if (route.passthrough) return 'Passed through to the service';
-  return route.certResolver ? `Yes, certificates from ${route.certResolver}` : 'Yes';
-}
-
-function detailRows(route) {
-  const status = statusOf(route);
-  return [
-    ['Status', status.kind === 'checking' ? 'Checking' : status.label],
-    ['Health check', healthText(route)],
-    ['Checked with', attemptText(route.health)],
-    ['Checked address', route.health?.address],
-    ['Last checked', route.health?.checkedAt && timeOf(route.health.checkedAt)],
-    ['Traefik status', route.status],
-    ['Address', addressOf(route)],
-    ['Router', route.id],
-    ['Rule', route.rule, 'code'],
-    ['Service', route.service],
-    ['Entry points', route.entryPoints.join(', ')],
-    ['Middlewares', route.middlewares.length ? route.middlewares.join(', ') : 'None'],
-    ['Protocol', route.protocol === 'tcp' ? 'TCP' : 'HTTP'],
-    ['TLS', tlsText(route)],
-    ['Priority', route.priority],
-  ].filter(([, value]) => value != null && value !== '');
 }
 
 function fillDetails(route) {
@@ -341,16 +210,6 @@ function summaryText() {
 
 function groupOf(id) {
   return data.groups.find(group => group.routes.includes(id));
-}
-
-function iconButton(icon, label, onClick) {
-  const button = el('button', 'group-tool');
-  button.type = 'button';
-  button.setAttribute('aria-label', label);
-  button.title = label;
-  button.innerHTML = icon;
-  button.addEventListener('click', onClick);
-  return button;
 }
 
 // Custom groups get buttons to move, rename and delete them, and can be dragged by their heading; entry point
@@ -482,18 +341,6 @@ function render() {
     els.empty.textContent = `Nothing matches “${els.filter.value.trim()}”. Clear the search to see every route.`;
     els.empty.hidden = false;
   }
-}
-
-// Resolves to the server's reply, or throws with the reason it gives for refusing the change.
-async function putJson(url, body) {
-  const res = await fetch(url, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  const reply = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(reply.error || `The homepage server responded with HTTP ${res.status}`);
-  return reply;
 }
 
 // Saving is optimistic: the page shows the change at once. If the server refuses it, the page goes back to the
@@ -800,55 +647,6 @@ async function load() {
   render();
 }
 
-// Storage can throw when site data is blocked; the theme choice is a convenience, so fail quietly.
-function storedTheme() {
-  try { return localStorage.getItem('theme'); } catch { return null; }
-}
-
-const systemDark = matchMedia('(prefers-color-scheme: dark)');
-
-function applyTheme(theme) {
-  document.documentElement.dataset.theme = theme;
-  els.themeToggle.setAttribute('aria-pressed', String(theme === 'dark'));
-}
-
-applyTheme(storedTheme() || (systemDark.matches ? 'dark' : 'light'));
-systemDark.addEventListener('change', event => {
-  if (!storedTheme()) applyTheme(event.matches ? 'dark' : 'light');
-});
-els.themeToggle.addEventListener('click', () => {
-  const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
-  try { localStorage.setItem('theme', next); } catch {}
-  applyTheme(next);
-});
-
-// The server says when something on the page has changed, such as a new icon or health check, so it shows up
-// straight away. The poll stays as a fallback for when the messages don't get through. A tab in the background
-// stops listening, which also keeps it from holding one of the browser's few connections to the server, and
-// catches up as soon as it's shown again.
-let changes = null;
-
-// Changes made while the stream is down aren't sent again, so the page fetches everything once it's back. The
-// browser reconnects by itself after a network error, but gives up for good when the server answers with anything
-// other than an event stream, such as Traefik's 502 or 404 while the homepage container restarts. Then a new
-// stream is started a little later instead.
-function listen(catchUp = false) {
-  if (changes || document.hidden || !window.EventSource) return;
-  const source = new EventSource('api/events');
-  changes = source;
-  source.addEventListener('message', load);
-  if (catchUp) source.addEventListener('open', load, { once: true });
-  source.addEventListener('error', () => {
-    if (changes !== source) return;
-    if (source.readyState === EventSource.CLOSED) {
-      changes = null;
-      setTimeout(() => listen(true), RECONNECT_MS);
-    } else {
-      source.addEventListener('open', load, { once: true });
-    }
-  });
-}
-
 els.filter.addEventListener('input', render);
 
 // "/" jumps to the search box, as on many sites, unless someone is typing somewhere or a dialog is open.
@@ -862,14 +660,5 @@ document.addEventListener('keydown', event => {
   els.filter.select();
 });
 load();
-listen();
+watchChanges(load);
 setInterval(() => { if (!document.hidden) load(); }, REFRESH_MS);
-document.addEventListener('visibilitychange', () => {
-  if (document.hidden) {
-    changes?.close();
-    changes = null;
-  } else {
-    listen();
-    load();
-  }
-});
