@@ -23,10 +23,13 @@ services:
       HEALTHCHECK_INTERVAL_SECONDS: 60
       # *.localhost resolves to the homepage container itself, so send health checks straight to Traefik.
       HEALTHCHECK_ADDRESS: traefik
+      # If your routes use certificates from your own CA, trust it for health checks (and mount it below).
+      # NODE_EXTRA_CA_CERTS: /certs/lab-ca.pem
     volumes:
       # Groups, names and icons you set on the page, and the icons found on your sites, are saved in this
       # folder next to this compose file.
       - ./config:/app/config
+      # - ./lab-ca.pem:/certs/lab-ca.pem:ro
     depends_on:
       - traefik
     labels:

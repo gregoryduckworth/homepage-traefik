@@ -112,10 +112,21 @@ Each enabled route with a link is checked once per `HEALTHCHECK_INTERVAL_SECONDS
 | **DNS failed**             | The hostname doesn't resolve from the homepage container                                                                           |
 | **Refused** / **Reset**    | Nothing listening on the port / the connection closed before a response                                                            |
 | **Unreachable**            | No network route to the host                                                                                                       |
-| **Certificate error**      | The certificate isn't trusted, has expired or doesn't match. Self-signed certificates and private CAs aren't trusted               |
+| **Certificate error**      | The certificate isn't trusted, has expired or doesn't match. See below to trust your own CA or a self-signed certificate           |
 | **TLS error** / **Down**   | The TLS handshake failed (for example HTTPS on a plain HTTP port) / anything else                                                  |
 
 **If everything times out or is refused but works in your browser:** the checks run from inside the homepage container. There, `*.localhost` resolves to the container itself, and public hostnames often resolve to an IP your router won't loop back to. Set `HEALTHCHECK_ADDRESS` to your Traefik container's name (for example `traefik`). Checks then connect straight to Traefik on the route's port, while still sending the route's hostname so Traefik picks the right router. This needs Traefik's entry points to listen on the same ports inside its container as the links use (80 and 443, or those in `ENTRYPOINT_PORTS`).
+
+**If your routes use certificates from your own CA, or self-signed ones:** the checks only trust the public CAs Node ships with, so those routes show **Certificate error**. That includes a private CA such as step-ca, mkcert or Caddy's internal CA. Mount the CA's certificate (or the self-signed certificate itself) into the container and point `NODE_EXTRA_CA_CERTS` at it, then recreate the container:
+
+```yaml
+    environment:
+      NODE_EXTRA_CA_CERTS: /certs/lab-ca.pem
+    volumes:
+      - ./lab-ca.pem:/certs/lab-ca.pem:ro
+```
+
+The file is in PEM format, starting with `-----BEGIN CERTIFICATE-----`, and can hold several certificates one after another. Node reads it once, when the container starts. Icon lookups don't check certificates, so they work either way.
 
 ## Customising the page
 
