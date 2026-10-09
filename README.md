@@ -132,9 +132,9 @@ The server keeps three files there:
 | --------------- | ------------------------------------------------- | ----------------------- |
 | `homepage.json` | Your groups, names, icons and hidden routes       | Yes                     |
 | `icons.json`    | Icons found on your sites                         | No, it's only a cache   |
-| `health.json`   | The latest health checks, so a restart shows them | No, it's only a cache   |
+| `health.json`   | Recent health checks, so a restart shows them     | No, it's only a cache   |
 
-`homepage.json` is only written when you change something on the page, so it's safe to keep in git.
+`homepage.json` is only written when you change something on the page, so it's safe to keep in git. `health.json` is saved at most every 10 minutes and when the container stops, to spare SD cards.
 
 The container runs as UID 1000, which must be able to write to the folder. Create it before the first start (`mkdir config`); otherwise Docker creates it owned by root. On Linux, run `sudo chown 1000 config` if your UID isn't 1000. A named volume (`homepage-config:/app/config`) works too.
 
