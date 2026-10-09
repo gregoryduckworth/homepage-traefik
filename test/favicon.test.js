@@ -353,6 +353,43 @@ describe('createIconStore', () => {
     assert.equal(await store.refresh([route('a')]), true);
   });
 
+  it('looks a route up when asked, even though it is not due, and says whether its icon changed', async () => {
+    const store = makeStore();
+    await store.refresh([route('a')]);
+    assert.equal(await store.recheck(route('a')), false);
+    found = { ...found, hash: 'def' };
+    assert.equal(await store.recheck(route('a')), true);
+    assert.equal(lookups.length, 3);
+    assert.equal(store.get('a').hash, 'def');
+  });
+
+  it('does not look a route up when asked if it is not reachable', async () => {
+    const store = makeStore();
+    assert.equal(await store.recheck(route('a', { reachable: false })), false);
+    assert.deepEqual(lookups, []);
+  });
+
+  it('keeps the newer icon when an older lookup finishes after it', async () => {
+    let release;
+    const gate = new Promise(resolve => { release = resolve; });
+    const old = found;
+    const store = makeStore({
+      find: async url => {
+        lookups.push(url);
+        if (lookups.length > 1) return found;
+        await gate;
+        return old;
+      },
+    });
+    const slow = store.refresh([route('a')]);
+    clock += HOUR;
+    found = { ...found, hash: 'def' };
+    await store.recheck(route('a'));
+    release();
+    assert.equal(await slow, false);
+    assert.equal(store.get('a').hash, 'def');
+  });
+
   it('serves saved icons without looking them up until they are due', async () => {
     const saved = new Map([['a', { url: 'http://a.test', checkedAt: clock - 23 * HOUR, icon: found }]]);
     const store = makeStore({ saved });

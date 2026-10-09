@@ -135,6 +135,33 @@ test('a hidden route leaves the page until hidden routes are shown', async ({ pa
   await expect(page.getByRole('button', { name: /hidden route/ })).toBeHidden();
 });
 
+test('a route can be checked again from its details, which say so until it is done', async ({ page }) => {
+  let release;
+  const held = new Promise(resolve => { release = resolve; });
+  await page.route('**/api/check/**', async route => {
+    await held;
+    await route.continue();
+  });
+  await details(page, 'grafana').click();
+  const dialog = page.getByRole('dialog', { name: 'grafana' });
+  await dialog.getByRole('button', { name: 'Check now' }).click();
+  await expect(dialog.getByRole('button', { name: 'Checking…' })).toHaveAttribute('aria-disabled', 'true');
+
+  const checked = page.waitForResponse(res => res.url().endsWith('/api/check/grafana%40docker'));
+  release();
+  expect((await checked).status()).toBe(200);
+  await expect(dialog.getByRole('button', { name: 'Check now' })).toHaveAttribute('aria-disabled', 'false');
+  await expect(dialog.getByRole('alert')).toHaveCount(0);
+});
+
+test('a check that fails says why in the route\'s details', async ({ page }) => {
+  await page.route('**/api/check/**', route => route.fulfill({ status: 500, json: { error: 'The homepage server hit an error' } }));
+  await details(page, 'grafana').click();
+  const dialog = page.getByRole('dialog', { name: 'grafana' });
+  await dialog.getByRole('button', { name: 'Check now' }).click();
+  await expect(dialog.getByRole('alert')).toHaveText('The route wasn’t checked. The homepage server hit an error');
+});
+
 test('pressing / jumps to the search box', async ({ page }) => {
   await page.keyboard.press('/');
   await expect(page.getByRole('searchbox', { name: 'Search routes' })).toBeFocused();

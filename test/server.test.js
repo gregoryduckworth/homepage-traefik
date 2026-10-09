@@ -38,7 +38,7 @@ describe('server', () => {
     traefikRouters = [{ name: 'app@docker', rule: 'Host(`app.test`)', status: 'enabled' }];
     await store.refresh();
     const icons = { get: id => (id === 'app@docker' ? { type: 'image/svg+xml', body: Buffer.from('<svg></svg>'), hash: 'abc123' } : null) };
-    server = createServer({ store, config, title: 'My lab', version: '1.2.3', icons });
+    server = createServer({ store, config, title: 'My lab', version: '1.2.3', icons, check: store.checkRoute });
     await new Promise(resolve => server.listen(0, resolve));
     base = `http://127.0.0.1:${server.address().port}`;
   });
@@ -164,6 +164,24 @@ describe('server', () => {
   it('returns 404 for a route with no icon', async () => {
     const res = await fetch(`${base}/api/icons/other%40docker`);
     assert.equal(res.status, 404);
+  });
+
+  it('checks a route when asked and replies with its health', async () => {
+    const res = await fetch(`${base}/api/check/app%40docker`, { method: 'POST' });
+    assert.equal(res.status, 200);
+    assert.equal((await res.json()).health.statusCode, 200);
+  });
+
+  it('returns 404 when asked to check a route it does not know', async () => {
+    const res = await fetch(`${base}/api/check/other%40docker`, { method: 'POST' });
+    assert.equal(res.status, 404);
+    assert.match((await res.json()).error, /no route by that name/);
+  });
+
+  it('only allows POST on the check endpoint', async () => {
+    const res = await fetch(`${base}/api/check/app%40docker`);
+    assert.equal(res.status, 405);
+    assert.equal(res.headers.get('allow'), 'POST');
   });
 
   it('serves the dashboard page', async () => {
@@ -393,6 +411,49 @@ describe('createRouteStore health checks', () => {
     const failing = makeStore({ fetchImpl: async () => { throw new Error('down'); } });
     assert.equal(await failing.refresh(), true);
     assert.equal(await failing.refresh(), false);
+  });
+
+  it('checks a route when asked, even though it is not due', async () => {
+    const store = makeStore();
+    await store.refresh();
+    await store.refreshHealth();
+    clock += 60 * 1000;
+    const route = await store.checkRoute('a@docker');
+    assert.deepEqual(checked, [['a@docker', 'b@docker'], ['a@docker']]);
+    assert.equal(route.health.checkedAt, new Date(clock).toISOString());
+    assert.equal(store.getRoutesWithHealth()[0].health.checkedAt, new Date(clock).toISOString());
+  });
+
+  it('has nothing to check when asked for a route it does not know or one that is disabled', async () => {
+    routers.push({ name: 'off@docker', rule: 'Host(`off.test`)', status: 'disabled' });
+    const store = makeStore();
+    await store.refresh();
+    assert.equal(await store.checkRoute('missing@docker'), null);
+    assert.equal(await store.checkRoute('off@docker'), null);
+    assert.deepEqual(checked, []);
+  });
+
+  it('keeps the newer result when an older check finishes after it', async () => {
+    let release;
+    const gate = new Promise(resolve => { release = resolve; });
+    const checkRoutes = async routes => {
+      const checkedAt = new Date(clock).toISOString();
+      if (!checked.length) {
+        checked.push('slow');
+        await gate;
+      }
+      return new Map(routes.map(route => [route.id, { reachable: true, statusCode: 200, checkedAt }]));
+    };
+    const store = makeStore({ checkRoutes });
+    await store.refresh();
+    const slow = store.refreshHealth();
+    clock += 60 * 1000;
+    await store.checkRoute('a@docker');
+    release();
+    await slow;
+    const [a, b] = store.getRoutesWithHealth();
+    assert.equal(a.health.checkedAt, new Date(clock).toISOString());
+    assert.equal(b.health.checkedAt, '2026-01-01T00:00:00.000Z');
   });
 
   it('reports no change when no route was due', async () => {
