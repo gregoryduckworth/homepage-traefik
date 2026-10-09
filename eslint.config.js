@@ -17,6 +17,11 @@ module.exports = [
     languageOptions: { sourceType: 'commonjs', globals: globals.node },
   },
   {
+    // Playwright tests pass functions to the page, such as page.evaluate(() => window.x), which run in the browser.
+    files: ['e2e/**/*.js'],
+    languageOptions: { globals: { ...globals.node, ...globals.browser } },
+  },
+  {
     // The page's scripts run in the browser as ES modules.
     files: ['public/**/*.js'],
     languageOptions: { sourceType: 'module', globals: globals.browser },
