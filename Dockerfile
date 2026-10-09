@@ -1,5 +1,6 @@
-# The current Node LTS. CI tests the same version, from .nvmrc, and checks the two match.
-FROM node:24-alpine
+# The current Node LTS. CI tests the same version, from .nvmrc, and checks the two match. The digest pins the exact
+# image, so a rebuild of the same commit gets the same base; Dependabot proposes a new digest when the tag moves.
+FROM node:24-alpine@sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1
 
 # The image's version, as tagged on Docker: 1.2.3 for a release, main for a build of main. CI sets it, and the page
 # shows it at the foot; an image built by hand says dev.
