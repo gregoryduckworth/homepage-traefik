@@ -2,7 +2,7 @@ name: Release
 
 # Run from the Actions tab. Works out the next version from the latest v* tag, tags the tip of main with it, writes a
 # GitHub release with notes from the pull requests merged since the last one, and starts the image build for the tag,
-# which publishes it as 1.2.3 and 1.2 as well as the commit's own tags.
+# which publishes it as 1.2.3, 1.2 and latest as well as the commit's own tags.
 on:
   workflow_dispatch:
     inputs:

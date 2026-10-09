@@ -94,6 +94,10 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=sha
+          # latest goes on version tags only (not pre-releases), so it always means the newest release; builds of
+          # main just get main.
+          flavor: |
+            latest=auto
 
       # Emulates arm64 so the image also runs on a Raspberry Pi and other ARM machines. That's the slow part of the
       # build, so pull requests, which don't publish, only build for amd64.
