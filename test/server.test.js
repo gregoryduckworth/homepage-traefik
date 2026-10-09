@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const { createServer, createRouteStore, readSeconds, readPort, readFrameAncestors } = require('../src/server');
+const { createServer, createRouteStore, atMostEvery, readSeconds, readPort, readFrameAncestors } = require('../src/server');
 const { createConfigStore } = require('../src/config');
 const { createEvents } = require('../src/events');
 
@@ -399,6 +399,62 @@ describe('createRouteStore health checks', () => {
     await store.refresh();
     await store.refreshHealth();
     assert.equal(await store.refreshHealth(), false);
+  });
+});
+
+describe('server errors', () => {
+  it('answers an unexpected error with a 500 instead of leaving the request hanging', async t => {
+    t.mock.method(console, 'error', () => {});
+    const config = { read: async () => { throw new Error('disk on fire'); } };
+    const store = createRouteStore({ traefikUrl: 'http://traefik:8080', fetchImpl: async () => jsonResponse([]) });
+    const server = createServer({ store, config, title: 'Lab' });
+    await new Promise(resolve => server.listen(0, resolve));
+    try {
+      const res = await fetch(`http://127.0.0.1:${server.address().port}/api/routes`);
+      assert.equal(res.status, 500);
+      assert.deepEqual(await res.json(), { error: 'The homepage server hit an error' });
+      assert.match(console.error.mock.calls[0].arguments[0], /GET \/api\/routes failed: disk on fire/);
+    } finally {
+      server.close();
+    }
+  });
+});
+
+describe('atMostEvery', () => {
+  function setup() {
+    let time = 0;
+    let runs = 0;
+    const saver = atMostEvery(1000, async () => { runs++; }, () => time);
+    return { saver, runs: () => runs, advance: ms => { time += ms; } };
+  }
+
+  it('runs the first request straight away', async () => {
+    const { saver, runs } = setup();
+    await saver.request();
+    assert.equal(runs(), 1);
+  });
+
+  it('holds back requests within the interval and runs them with the next one after it', async () => {
+    const { saver, runs, advance } = setup();
+    await saver.request();
+    advance(500);
+    await saver.request();
+    await saver.request();
+    assert.equal(runs(), 1);
+    advance(500);
+    await saver.request();
+    assert.equal(runs(), 2);
+  });
+
+  it('runs a held-back request when flushed, and nothing when none is waiting', async () => {
+    const { saver, runs, advance } = setup();
+    await saver.request();
+    await saver.flush();
+    assert.equal(runs(), 1);
+    advance(10);
+    await saver.request();
+    await saver.flush();
+    assert.equal(runs(), 2);
   });
 });
 

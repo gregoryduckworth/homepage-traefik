@@ -36,6 +36,9 @@ function cacheControlFor(filePath) {
 // ago can look a moment too young. Without some slack it would wait a whole extra tick.
 const DUE_SLACK_MS = 2000;
 
+// health.json is only a cache for showing results straight after a restart, so it needn't be saved on every check.
+const HEALTH_SAVE_MS = 10 * 60 * 1000;
+
 function createRouteStore({
   traefikUrl,
   fetchImpl,
@@ -188,7 +191,7 @@ function pathParam(pathname, prefix) {
 // lists the sites that may show the page in a frame: anyone who can open it can change its groups, so by default
 // only the homepage itself may, which stops another site tricking someone into dragging routes about.
 function createServer({ store, config, title, icons = { get: () => null }, events = null, frameAncestors = "'self'" }) {
-  return http.createServer(async (req, res) => {
+  async function handle(req, res) {
     const { pathname } = new URL(req.url, 'http://localhost');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Content-Security-Policy', `${PAGE_CSP}; frame-ancestors ${frameAncestors}`);
@@ -253,6 +256,16 @@ function createServer({ store, config, title, icons = { get: () => null }, event
     } catch {
       res.writeHead(404, { 'Content-Type': 'text/plain' }).end('Not found');
     }
+  }
+
+  // An error nothing above expected is answered with a 500, rather than leaving the request hanging and, as an
+  // unhandled rejection, stopping the server.
+  return http.createServer((req, res) => {
+    handle(req, res).catch(err => {
+      console.error(`${req.method} ${req.url} failed: ${err.message}`);
+      if (res.headersSent) res.destroy();
+      else sendJson(res, 500, { error: 'The homepage server hit an error' });
+    });
   });
 }
 
@@ -273,6 +286,28 @@ function saveQuietly(what, task) {
     });
     return queue;
   };
+}
+
+// Runs `task` when asked, but at most once every `intervalMs`. A request that comes sooner is remembered, and runs
+// with the next request after the interval or with `flush`. This keeps a file that changes on every poll, such as
+// health.json, from wearing out a Raspberry Pi's SD card.
+function atMostEvery(intervalMs, task, now = Date.now) {
+  let last = -Infinity;
+  let pending = false;
+
+  async function flush() {
+    if (!pending) return;
+    pending = false;
+    last = now();
+    await task();
+  }
+
+  async function request() {
+    pending = true;
+    if (now() - last >= intervalMs) await flush();
+  }
+
+  return { request, flush };
 }
 
 // A missing, mistyped or tiny interval would otherwise poll back to back, so it falls back to the default or is
@@ -354,7 +389,8 @@ if (require.main === module) {
     // Icons are looked up even for routes with one set in the config file, so the page can fall back to the
     // site's own icon if that one doesn't load.
     const icons = createIconStore({ options: healthOptions, saved: savedIcons ?? new Map(), onChange: events.notify });
-    const saveHealth = saveQuietly(`Saving health checks to ${healthFile}`, () => writeSafely(healthFile, `${JSON.stringify(store.getHealth(), null, 2)}\n`));
+    // Saved at most every HEALTH_SAVE_MS, and when the server stops.
+    const saveHealth = atMostEvery(HEALTH_SAVE_MS, saveQuietly(`Saving health checks to ${healthFile}`, () => writeSafely(healthFile, `${JSON.stringify(store.getHealth(), null, 2)}\n`)));
     const saveIcons = saveQuietly(`Saving icons to ${iconsFile}`, () => writeSafely(iconsFile, icons.serialize()));
     const refreshIcons = () => icons.refresh(store.getRoutesWithHealth()).then(changed => changed && saveIcons(), err => {
       console.error(`Looking up route icons failed: ${err.message}`);
@@ -371,8 +407,11 @@ if (require.main === module) {
         const routesChanged = await store.refresh();
         const healthChanged = await store.refreshHealth();
         if (routesChanged || healthChanged) events.notify();
-        if (healthChanged) await saveHealth();
+        if (healthChanged) await saveHealth.request();
         if (store.state.updatedAt) refreshIcons();
+      } catch (err) {
+        // Logged rather than thrown: an unhandled rejection would stop the server, and the next tick may well work.
+        console.error(`Polling failed: ${err.message}`);
       } finally {
         polling = false;
       }
@@ -381,8 +420,9 @@ if (require.main === module) {
     const server = createServer({ store, config, title, icons, events, frameAncestors });
     server.listen(port, () => console.log(`Homepage on :${port}, reading routes from ${traefikUrl} every ${pollSeconds}s, checking each route every ${healthSeconds}s, groups from ${configFile}`));
     for (const signal of ['SIGINT', 'SIGTERM']) {
-      process.on(signal, () => {
+      process.on(signal, async () => {
         events.close();
+        await saveHealth.flush();
         server.close(() => process.exit(0));
       });
     }
@@ -391,4 +431,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { createServer, createRouteStore, readSeconds, readPort, readFrameAncestors };
+module.exports = { createServer, createRouteStore, atMostEvery, readSeconds, readPort, readFrameAncestors };
