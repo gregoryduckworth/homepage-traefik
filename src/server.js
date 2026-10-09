@@ -36,9 +36,6 @@ function cacheControlFor(filePath) {
 // ago can look a moment too young. Without some slack it would wait a whole extra tick.
 const DUE_SLACK_MS = 2000;
 
-// health.json is only a cache for showing results straight after a restart, so it needn't be saved on every check.
-const HEALTH_SAVE_MS = 10 * 60 * 1000;
-
 function createRouteStore({
   traefikUrl,
   fetchImpl,
@@ -311,8 +308,8 @@ function atMostEvery(intervalMs, task, now = Date.now) {
 }
 
 // A missing, mistyped or tiny interval would otherwise poll back to back, so it falls back to the default or is
-// raised to the minimum.
-function readSeconds(env, name, { fallback, min }) {
+// raised to the minimum. With `off`, 0 is allowed too, and means the thing it times never happens.
+function readSeconds(env, name, { fallback, min, off = false }) {
   const raw = env[name];
   if (raw === undefined || raw.trim() === '') return fallback;
   const value = Number(raw);
@@ -320,8 +317,9 @@ function readSeconds(env, name, { fallback, min }) {
     console.warn(`${name}=${raw} isn't a number of seconds, so ${fallback} is used`);
     return fallback;
   }
+  if (off && value === 0) return 0;
   if (value < min) {
-    console.warn(`${name}=${raw} is below the minimum, so ${min} is used`);
+    console.warn(`${name}=${raw} is below the minimum, so ${min} is used${off ? ' (0 turns it off)' : ''}`);
     return min;
   }
   return value;
@@ -360,6 +358,8 @@ if (require.main === module) {
   if (invalidPorts.length) console.warn(`Ignoring ${invalidPorts.join(', ')} in ENTRYPOINT_PORTS: each entry should be <entry point>:<port>, such as websecure:8443`);
   const configFile = path.resolve(process.env.CONFIG_FILE || 'config/homepage.json');
   const timeoutSeconds = readSeconds(process.env, 'HEALTHCHECK_TIMEOUT_SECONDS', { fallback: 10, min: 1 });
+  // health.json is only a cache for showing results straight after a restart, so it needn't be saved on every check.
+  const healthSaveSeconds = readSeconds(process.env, 'HEALTH_SAVE_SECONDS', { fallback: 600, min: 60, off: true });
   const healthOptions = {
     timeoutMs: timeoutSeconds * 1000,
     address: process.env.HEALTHCHECK_ADDRESS || undefined,
@@ -389,8 +389,11 @@ if (require.main === module) {
     // Icons are looked up even for routes with one set in the config file, so the page can fall back to the
     // site's own icon if that one doesn't load.
     const icons = createIconStore({ options: healthOptions, saved: savedIcons ?? new Map(), onChange: events.notify });
-    // Saved at most every HEALTH_SAVE_MS, and when the server stops.
-    const saveHealth = atMostEvery(HEALTH_SAVE_MS, saveQuietly(`Saving health checks to ${healthFile}`, () => writeSafely(healthFile, `${JSON.stringify(store.getHealth(), null, 2)}\n`)));
+    // Saved at most every HEALTH_SAVE_SECONDS and when the server stops, or never when that's 0.
+    const writeHealth = saveQuietly(`Saving health checks to ${healthFile}`, () => writeSafely(healthFile, `${JSON.stringify(store.getHealth(), null, 2)}\n`));
+    const saveHealth = healthSaveSeconds
+      ? atMostEvery(healthSaveSeconds * 1000, writeHealth)
+      : { request: async () => {}, flush: async () => {} };
     const saveIcons = saveQuietly(`Saving icons to ${iconsFile}`, () => writeSafely(iconsFile, icons.serialize()));
     const refreshIcons = () => icons.refresh(store.getRoutesWithHealth()).then(changed => changed && saveIcons(), err => {
       console.error(`Looking up route icons failed: ${err.message}`);

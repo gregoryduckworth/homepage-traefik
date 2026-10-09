@@ -474,6 +474,27 @@ describe('readSeconds', () => {
       assert.equal(readSeconds(env, 'POLL', opts), expected);
     });
   }
+
+  describe('with off', () => {
+    const offOpts = { fallback: 600, min: 60, off: true };
+    const offCases = [
+      ['takes 0 to mean off', { SAVE: '0' }, 0],
+      ['still raises other values below the minimum', { SAVE: '30' }, 60],
+      ['uses the default when unset', {}, 600],
+    ];
+    for (const [name, env, expected] of offCases) {
+      it(name, t => {
+        t.mock.method(console, 'warn', () => {});
+        assert.equal(readSeconds(env, 'SAVE', offOpts), expected);
+      });
+    }
+
+    it('says 0 turns it off when a value is too small', t => {
+      t.mock.method(console, 'warn', () => {});
+      readSeconds({ SAVE: '30' }, 'SAVE', offOpts);
+      assert.equal(console.warn.mock.calls[0].arguments[0], 'SAVE=30 is below the minimum, so 60 is used (0 turns it off)');
+    });
+  });
 });
 
 describe('readPort', () => {
