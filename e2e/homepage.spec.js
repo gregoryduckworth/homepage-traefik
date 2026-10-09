@@ -99,6 +99,19 @@ test('the page keeps the last routes and explains why when Traefik goes away', a
   await expect(details(page, 'grafana')).toBeVisible();
 });
 
+test('nothing on the page is blocked by its Content-Security-Policy', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.cspViolations = [];
+    document.addEventListener('securitypolicyviolation', event => window.cspViolations.push(`${event.violatedDirective} ${event.blockedURI}`));
+  });
+  await page.reload();
+  await details(page, 'grafana').click();
+  await expect(page.getByRole('dialog')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: 'Dark theme' }).click();
+  expect(await page.evaluate(() => window.cspViolations)).toEqual([]);
+});
+
 test.describe('theme', () => {
   test.use({ colorScheme: 'light' });
 

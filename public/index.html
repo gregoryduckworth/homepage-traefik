@@ -6,14 +6,8 @@
   <title>Routes</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="styles.css">
-  <script>
-    // Set the theme before first paint to avoid a light flash for dark-mode users.
-    (function () {
-      var theme = null;
-      try { theme = localStorage.getItem('theme'); } catch (e) {}
-      document.documentElement.dataset.theme = theme || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
-    })();
-  </script>
+  <!-- A script in the head runs before first paint, so dark-mode users don't see a flash of the light theme. -->
+  <script src="theme.js"></script>
 </head>
 <body>
   <header class="bar">

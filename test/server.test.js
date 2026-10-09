@@ -153,7 +153,7 @@ describe('server', () => {
     const res = await fetch(`${base}/api/icons/app%40docker?v=abc123`);
     assert.equal(res.status, 200);
     assert.equal(res.headers.get('content-type'), 'image/svg+xml');
-    assert.match(res.headers.get('content-security-policy'), /sandbox/);
+    assert.equal(res.headers.get('content-security-policy'), "default-src 'none'; style-src 'unsafe-inline'; sandbox");
     assert.equal(res.headers.get('x-content-type-options'), 'nosniff');
     assert.equal(await res.text(), '<svg></svg>');
   });
@@ -178,9 +178,36 @@ describe('server', () => {
   it('stops other sites framing the page and browsers guessing types', async () => {
     for (const url of ['/', '/api/routes', '/missing']) {
       const res = await fetch(`${base}${url}`);
-      assert.equal(res.headers.get('content-security-policy'), "frame-ancestors 'self'", url);
+      assert.match(res.headers.get('content-security-policy'), /; frame-ancestors 'self'$/, url);
       assert.equal(res.headers.get('x-content-type-options'), 'nosniff', url);
     }
+  });
+
+  it('lets the page load only its own files and http or https images', async () => {
+    const csp = (await fetch(`${base}/`)).headers.get('content-security-policy');
+    assert.match(csp, /^default-src 'self'; img-src 'self' http: https:; object-src 'none'; base-uri 'none'; /);
+  });
+
+  it('has no inline script, which the page CSP would block', async () => {
+    const html = await (await fetch(`${base}/`)).text();
+    assert.doesNotMatch(html, /<script(?![^>]*\bsrc=)[^>]*>/);
+  });
+
+  it('answers an unchanged page file with 304 so the browser uses its copy', async () => {
+    const first = await fetch(`${base}/app.js`);
+    assert.equal(first.headers.get('cache-control'), 'no-cache');
+    const etag = first.headers.get('etag');
+    assert.ok(etag);
+    const again = await fetch(`${base}/app.js`, { headers: { 'If-None-Match': etag } });
+    assert.equal(again.status, 304);
+    assert.equal(await again.text(), '');
+    const stale = await fetch(`${base}/app.js`, { headers: { 'If-None-Match': 'W/"other"' } });
+    assert.equal(stale.status, 200);
+  });
+
+  it('lets browsers keep the fonts without asking', async () => {
+    const res = await fetch(`${base}/fonts/atkinson-hyperlegible-latin-400-normal.woff2`);
+    assert.equal(res.headers.get('cache-control'), 'public, max-age=604800');
   });
 
   it('does not serve files outside the public directory', async () => {
@@ -429,7 +456,7 @@ describe('readFrameAncestors', () => {
     await new Promise(resolve => server.listen(0, resolve));
     try {
       const res = await fetch(`http://127.0.0.1:${server.address().port}/healthz`);
-      assert.equal(res.headers.get('content-security-policy'), 'frame-ancestors *');
+      assert.match(res.headers.get('content-security-policy'), /; frame-ancestors \*$/);
     } finally {
       server.close();
     }
