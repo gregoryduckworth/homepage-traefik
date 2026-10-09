@@ -1,6 +1,5 @@
 // What the page says about a route, worked out from the route alone.
 
-const CERT_ERROR = 'Certificate error';
 const FAILURE_LABELS = {
   TIMEOUT: 'Timed out',
   ENOTFOUND: 'DNS failed',
@@ -9,14 +8,6 @@ const FAILURE_LABELS = {
   ECONNRESET: 'Reset',
   EHOSTUNREACH: 'Unreachable',
   ENETUNREACH: 'Unreachable',
-  DEPTH_ZERO_SELF_SIGNED_CERT: CERT_ERROR,
-  SELF_SIGNED_CERT_IN_CHAIN: CERT_ERROR,
-  UNABLE_TO_VERIFY_LEAF_SIGNATURE: CERT_ERROR,
-  UNABLE_TO_GET_ISSUER_CERT: CERT_ERROR,
-  UNABLE_TO_GET_ISSUER_CERT_LOCALLY: CERT_ERROR,
-  CERT_HAS_EXPIRED: CERT_ERROR,
-  CERT_NOT_YET_VALID: CERT_ERROR,
-  ERR_TLS_CERT_ALTNAME_INVALID: CERT_ERROR,
 };
 
 export function groupKey(route) {
@@ -29,7 +20,9 @@ export function matches(route, query) {
     .some(value => value && value.toLowerCase().includes(query));
 }
 
-function failureLabel({ error, phase }) {
+// The server says which errors are certificate errors, since it's the one that knows Node's codes for them.
+function failureLabel({ error, phase, certificateError }) {
+  if (certificateError) return 'Certificate error';
   if (FAILURE_LABELS[error]) return FAILURE_LABELS[error];
   return phase === 'tls' || error?.startsWith('ERR_SSL') ? 'TLS error' : 'Down';
 }
