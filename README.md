@@ -182,7 +182,7 @@ Apart from one line at startup, the server only logs when something goes wrong, 
 
 ## Development
 
-Requires Node.js 22 or newer.
+Uses Node.js 24, the current LTS and the version in the image. Run `nvm use` to switch to it, as `.nvmrc` sets it.
 
 ```sh
 TRAEFIK_API_URL=http://localhost:8080 npm run dev

@@ -13,7 +13,8 @@ updates:
     directory: /
     schedule:
       interval: weekly
-    # Moving to the next Node major is a choice to make with package.json and CI, not on every odd-numbered release.
+    # The image stays on the current Node LTS. Moving to the next one means changing .nvmrc and package.json with it,
+    # which CI checks, so major versions aren't proposed here.
     ignore:
       - dependency-name: node
         update-types: ["version-update:semver-major"]
