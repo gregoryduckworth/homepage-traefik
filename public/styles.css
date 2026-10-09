@@ -620,6 +620,16 @@ a.tile-link:hover .tile-name { color: var(--accent); }
 .hidden-toggle { display: block; margin: 1.5rem 0; }
 .hidden-toggle[hidden] { display: none; }
 
+.footer {
+  max-width: 80rem;
+  margin: 0 auto;
+  padding: 0 clamp(0.75rem, 3vw, 2rem) 1.5rem;
+  font-size: 0.8125rem;
+  color: var(--muted);
+}
+
+.footer a { color: inherit; }
+
 @keyframes pulse {
   50% { opacity: 0.3; }
 }

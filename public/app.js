@@ -6,6 +6,7 @@ import { addressOf, byName, detailRows, displayName, groupKey, isHidden, matches
 import './theme-toggle.js';
 
 const REFRESH_MS = 30000;
+const REPO_URL = 'https://github.com/gregoryduckworth/homepage-traefik';
 
 const els = {
   title: $('title'),
@@ -32,6 +33,8 @@ const els = {
   routeSubmit: $('route-submit'),
   detailsHide: $('details-hide'),
   hiddenToggle: $('hidden-toggle'),
+  footer: $('footer'),
+  version: $('version'),
 };
 
 closeOnBackdrop(els.details);
@@ -542,7 +545,16 @@ async function load() {
     els.title.textContent = data.title;
     document.title = data.title;
   }
+  if (data.version) showVersion(data.version);
   render();
+}
+
+// The image's version, as tagged on Docker. A release links to its notes; a build of main, to the repository.
+function showVersion(version) {
+  const release = /^\d+\.\d+\.\d+$/.test(version);
+  els.version.textContent = version;
+  els.version.href = release ? `${REPO_URL}/releases/tag/v${version}` : REPO_URL;
+  els.footer.hidden = false;
 }
 
 els.filter.addEventListener('input', render);

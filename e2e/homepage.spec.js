@@ -164,6 +164,19 @@ test('nothing on the page is blocked by its Content-Security-Policy', async ({ p
   expect(await page.evaluate(() => window.cspViolations)).toEqual([]);
 });
 
+test('the foot of the page shows the version, linked to its release notes', async ({ page }) => {
+  await expect(page.getByRole('contentinfo')).toHaveText('homepage-traefik 1.2.3');
+  await expect(page.getByRole('link', { name: '1.2.3' })).toHaveAttribute('href', 'https://github.com/gregoryduckworth/homepage-traefik/releases/tag/v1.2.3');
+});
+
+test.describe('a build of main', () => {
+  test.use({ version: 'main' });
+
+  test('links its version to the repository, as it has no release notes', async ({ page }) => {
+    await expect(page.getByRole('link', { name: 'main' })).toHaveAttribute('href', 'https://github.com/gregoryduckworth/homepage-traefik');
+  });
+});
+
 test.describe('theme', () => {
   test.use({ colorScheme: 'light' });
 

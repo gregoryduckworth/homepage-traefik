@@ -1,7 +1,10 @@
 # The current Node LTS. CI tests the same version, from .nvmrc, and checks the two match.
 FROM node:24-alpine
 
-ENV NODE_ENV=production
+# The image's version, as tagged on Docker: 1.2.3 for a release, main for a build of main. CI sets it, and the page
+# shows it at the foot; an image built by hand says dev.
+ARG VERSION=dev
+ENV NODE_ENV=production HOMEPAGE_VERSION=$VERSION
 WORKDIR /app
 
 COPY package.json ./
