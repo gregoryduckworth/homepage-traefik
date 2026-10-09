@@ -72,6 +72,16 @@ test('groups can be reordered with their arrow buttons', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Move Second up' })).toBeDisabled();
 });
 
+test('a group dragged by its heading onto the top half of another goes above it', async ({ page, homepage }) => {
+  await createGroup(page, 'First');
+  await createGroup(page, 'Second');
+  const heading = name => group(page, name).getByRole('heading', { level: 2 });
+  await heading('Second').dragTo(group(page, 'First'), { targetPosition: { x: 20, y: 5 } });
+
+  await expect(page.getByRole('heading', { level: 2 })).toHaveText(['Second (0)', 'First (0)', 'web (2)', 'websecure (1)']);
+  await expect.poll(async () => (await homepage.readConfig()).groups.map(g => g.name)).toEqual(['Second', 'First']);
+});
+
 test('a route can be renamed, and goes back to its router name when cleared', async ({ page, homepage }) => {
   await details(page, 'grafana').click();
   await page.getByRole('button', { name: 'Change name or icon' }).click();
