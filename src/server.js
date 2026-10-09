@@ -6,7 +6,7 @@ const { checkAllRoutes, isCheckable } = require('./healthcheck');
 const { ConfigError, createConfigStore } = require('./config');
 const { createIconStore, parseSavedIcons } = require('./favicon');
 const { createEvents } = require('./events');
-const { writeSafely } = require('./files');
+const { writeSafely, directoryInsteadOfFile } = require('./files');
 
 const PUBLIC_DIR = path.resolve(__dirname, '..', 'public');
 
@@ -140,8 +140,20 @@ function isJson(req) {
   return /^application\/json\b/.test(req.headers['content-type'] || '');
 }
 
+// Answers with a 405 or a 415 unless the request is a `method` with a JSON body, and says whether it was.
+function accepts(req, res, method) {
+  if (req.method !== method) {
+    res.writeHead(405, { Allow: method, 'Content-Type': 'text/plain' }).end('Method not allowed');
+    return false;
+  }
+  if (!isJson(req)) {
+    sendJson(res, 415, { error: 'Send the request body as application/json' });
+    return false;
+  }
+  return true;
+}
+
 async function readJson(req) {
-  if (!isJson(req)) throw new ConfigError('Send the request body as application/json', 415);
   const chunks = [];
   let size = 0;
   for await (const chunk of req) {
@@ -159,10 +171,7 @@ async function readJson(req) {
 // Reads a JSON body for a PUT and replies with whatever `save` returns, or with the error. Resolves to whether
 // the change was saved.
 async function handlePut(req, res, what, save) {
-  if (req.method !== 'PUT') {
-    res.writeHead(405, { Allow: 'PUT', 'Content-Type': 'text/plain' }).end('Method not allowed');
-    return false;
-  }
+  if (!accepts(req, res, 'PUT')) return false;
   try {
     sendJson(res, 200, await save(await readJson(req)));
     return true;
@@ -254,14 +263,7 @@ function createServer({ store, config, title, version = null, icons = { get: () 
     }
 
     if (pathname.startsWith('/api/check/') && check) {
-      if (req.method !== 'POST') {
-        res.writeHead(405, { Allow: 'POST', 'Content-Type': 'text/plain' }).end('Method not allowed');
-        return;
-      }
-      if (!isJson(req)) {
-        sendJson(res, 415, { error: 'Send the request as application/json' });
-        return;
-      }
+      if (!accepts(req, res, 'POST')) return;
       const route = await checkOnce(pathParam(pathname, '/api/check/'));
       if (route) sendJson(res, 200, { health: route.health });
       else sendJson(res, 404, { error: 'There’s no route by that name with an address to check' });
@@ -404,7 +406,7 @@ if (require.main === module) {
   const iconsFile = path.join(path.dirname(configFile), 'icons.json');
   const loadCache = (file, parse) => fs.readFile(file, 'utf8').then(parse).catch(err => {
     if (err.code === 'EISDIR') {
-      console.warn(`${file} is a directory, not a file, so it won't be saved. Docker creates a directory when the file you mount doesn't exist on the host: create the file (an empty one is fine), remove the directory Docker made and recreate the container`);
+      console.warn(directoryInsteadOfFile(file, ", so it won't be saved"));
     } else if (err.code !== 'ENOENT') {
       console.warn(`Ignoring ${file}: ${err.message}`);
     }

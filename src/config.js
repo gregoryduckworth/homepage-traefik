@@ -1,5 +1,5 @@
 const fs = require('node:fs/promises');
-const { writeSafely } = require('./files');
+const { writeSafely, directoryInsteadOfFile } = require('./files');
 
 const MAX_GROUPS = 100;
 const MAX_NAME_LENGTH = 60;
@@ -12,6 +12,10 @@ class ConfigError extends Error {
     super(message);
     this.status = status;
   }
+}
+
+function checkRouteCount(count) {
+  if (count > MAX_ROUTE_SETTINGS) throw new ConfigError(`There can be at most ${MAX_ROUTE_SETTINGS} entries in "routes"`);
 }
 
 // A route belongs to at most one group; later duplicates are dropped so a hand edit can't show a route twice.
@@ -64,7 +68,7 @@ function normalizeRouteSetting(input, label = 'the route') {
 function normalizeRouteSettings(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new ConfigError('"routes" must be an object keyed by router name');
   const entries = Object.entries(input);
-  if (entries.length > MAX_ROUTE_SETTINGS) throw new ConfigError(`There can be at most ${MAX_ROUTE_SETTINGS} entries in "routes"`);
+  checkRouteCount(entries.length);
   return Object.fromEntries(entries
     .map(([id, setting]) => [id, normalizeRouteSetting(setting, `route "${id}"`)])
     .filter(([, setting]) => setting));
@@ -98,11 +102,7 @@ function createConfigStore({ file }) {
     }
 
     if (stat.isDirectory()) {
-      cache = {
-        ...cache,
-        version: null,
-        error: `${file} is a directory, not a file. Docker creates a directory when the file you mount doesn't exist on the host, or is in a folder Docker can't see: create the file (an empty one is fine), remove the directory Docker made and recreate the container`,
-      };
+      cache = { ...cache, version: null, error: directoryInsteadOfFile(file) };
       return cache;
     }
 
@@ -167,7 +167,7 @@ function createConfigStore({ file }) {
       // fromEntries defines own keys, so even a router named __proto__ is stored as a plain entry.
       const others = Object.entries(current.routes).filter(([key]) => key !== id);
       const routes = Object.fromEntries(setting ? [...others, [id, setting]] : others);
-      if (Object.keys(routes).length > MAX_ROUTE_SETTINGS) throw new ConfigError(`There can be at most ${MAX_ROUTE_SETTINGS} entries in "routes"`);
+      checkRouteCount(Object.keys(routes).length);
       const { routes: _routes, ...rest } = current.doc;
       await commit(current, Object.keys(routes).length ? { ...current.doc, routes } : rest, { routes });
       return setting;
