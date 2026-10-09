@@ -88,6 +88,30 @@ test('a route can be renamed, and goes back to its router name when cleared', as
   await expect(details(page, 'grafana')).toBeVisible();
 });
 
+test('an icon that does not load is not requested again each time the page updates', async ({ page }) => {
+  let requests = 0;
+  // Browsers reuse a failed image they're allowed to cache, so this one isn't, as with many apps' error pages.
+  await page.route('https://icons.test/broken.png', route => {
+    requests++;
+    return route.fulfill({ status: 404, headers: { 'Cache-Control': 'no-store' } });
+  });
+  await details(page, 'grafana').click();
+  await page.getByRole('button', { name: 'Change name or icon' }).click();
+  const form = page.getByRole('dialog', { name: 'Name and icon' });
+  await form.getByLabel('Icon address').fill('https://icons.test/broken.png');
+  await form.getByRole('button', { name: 'Save' }).click();
+  await page.keyboard.press('Escape');
+
+  const tile = page.getByRole('link', { name: /grafana/ });
+  await expect(tile.locator('.tile-letter')).toHaveText('G');
+  // Each keystroke in the search box rebuilds the tiles.
+  const search = page.getByRole('searchbox', { name: 'Search routes' });
+  await search.fill('graf');
+  await search.fill('');
+  await expect(tile.locator('.tile-letter')).toHaveText('G');
+  expect(requests).toBe(1);
+});
+
 test('a hidden route leaves the page until hidden routes are shown', async ({ page }) => {
   await details(page, 'jellyfin').click();
   await page.getByRole('button', { name: 'Hide route' }).click();
