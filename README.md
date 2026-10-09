@@ -52,6 +52,12 @@ Which image tag to use:
 
 The foot of the page shows which one you're running, as its tag: `1.2.3` for a release, `main` for a build of `main`. The release notes say what changed. Docker doesn't fetch a newer image by itself: run `docker compose pull && docker compose up -d` to upgrade.
 
+Each published image comes with signed provenance, saying which workflow, commit and repository built it, and a list of the packages in it. To check an image was built here before you run it, use the [GitHub CLI](https://cli.github.com/):
+
+```sh
+gh attestation verify oci://ghcr.io/gregoryduckworth/homepage-traefik:latest --owner gregoryduckworth
+```
+
 ## Where routes come from
 
 The homepage asks Traefik which routers it's serving (`/api/http/routers` and `/api/tcp/routers`). So it lists routers from **every provider** Traefik has loaded, not just Docker labels. A router in a file-provider config shows up exactly like one from a label:
@@ -222,6 +228,6 @@ Run the **Release** workflow from the Actions tab, on `main`, and choose `patch`
 
 1. Tags the latest commit on `main` with the next version, such as `v1.2.4` after `v1.2.3`.
 2. Writes a GitHub release, with notes listing the pull requests merged since the last one.
-3. Starts the image build for the tag, which runs the tests and publishes `ghcr.io/gregoryduckworth/homepage-traefik:1.2.4`, `:1.2` and `:latest` for `amd64` and `arm64`.
+3. Starts the image build for the tag, which runs the tests and publishes `ghcr.io/gregoryduckworth/homepage-traefik:1.2.4`, `:1.2` and `:latest` for `amd64` and `arm64`, with signed provenance and a list of the packages in it.
 
 For the first release, choose `major` to get `1.0.0`. A commit that's already released can't be released again. Pushing a `v1.2.3` tag yourself still builds and publishes the image, but doesn't write a release.

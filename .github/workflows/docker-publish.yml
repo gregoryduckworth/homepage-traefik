@@ -79,6 +79,9 @@ jobs:
     permissions:
       contents: read
       packages: write
+      # To sign the image's provenance (with a short-lived Sigstore certificate) and record it on GitHub.
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@v7
 
@@ -111,6 +114,7 @@ jobs:
       - uses: docker/setup-buildx-action@v4
 
       - uses: docker/build-push-action@v7
+        id: build
         with:
           context: .
           platforms: ${{ github.event_name == 'pull_request' && 'linux/amd64' || 'linux/amd64,linux/arm64' }}
@@ -119,5 +123,17 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           # The version the page shows, matching the image's tag: 1.2.3 for a release, main for a build of main.
           build-args: VERSION=${{ steps.meta.outputs.version }}
+          # A list of the packages in each published image, stored with it in the registry.
+          sbom: ${{ github.event_name != 'pull_request' }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # Signed provenance for each published image: which workflow, commit and repository built it. The README says
+      # how to check it. Storage records are only for repositories owned by an organization.
+      - uses: actions/attest@v4
+        if: github.event_name != 'pull_request'
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+          create-storage-record: false
