@@ -7,6 +7,16 @@ on:
   pull_request:
     branches: [main]
 
+# Jobs can only read the repository unless they ask for more, as the publishing job does.
+permissions:
+  contents: read
+
+# A new push to a pull request cancels the run it replaces. Runs on main and tags always finish, so every commit
+# there is published.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
@@ -83,15 +93,17 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=sha
 
-      # Emulates arm64 so the image also runs on a Raspberry Pi and other ARM machines.
+      # Emulates arm64 so the image also runs on a Raspberry Pi and other ARM machines. That's the slow part of the
+      # build, so pull requests, which don't publish, only build for amd64.
       - uses: docker/setup-qemu-action@v4
+        if: github.event_name != 'pull_request'
 
       - uses: docker/setup-buildx-action@v4
 
       - uses: docker/build-push-action@v7
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ github.event_name == 'pull_request' && 'linux/amd64' || 'linux/amd64,linux/arm64' }}
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
