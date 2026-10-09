@@ -41,7 +41,7 @@ services:
       - traefik.http.services.homepage.loadbalancer.server.port=3000
 ```
 
-The `main` tag follows the latest commit. When a version is tagged on GitHub (`v1.2.3`), the image also gets `1.2.3` and `1.2` tags. Pin one of those if you'd rather choose when to upgrade.
+The `main` tag follows the latest commit. Each [release](https://github.com/gregoryduckworth/homepage-traefik/releases) (`v1.2.3`) is also published as `1.2.3` and `1.2`. Pin one of those if you'd rather choose when to upgrade; the release notes say what changed.
 
 ## Where routes come from
 
@@ -194,3 +194,13 @@ npm run lint                               # ESLint, as CI runs it
 ```
 
 Playwright and ESLint are development dependencies only; the image doesn't include them.
+
+### Releasing
+
+Run the **Release** workflow from the Actions tab, on `main`, and choose `patch`, `minor` or `major` (or type an exact version). It:
+
+1. Tags the latest commit on `main` with the next version, such as `v1.2.4` after `v1.2.3`.
+2. Writes a GitHub release, with notes listing the pull requests merged since the last one.
+3. Starts the image build for the tag, which runs the tests and publishes `ghcr.io/gregoryduckworth/homepage-traefik:1.2.4` and `:1.2` for `amd64` and `arm64`.
+
+For the first release, choose `major` to get `1.0.0`. A commit that's already released can't be released again. Pushing a `v1.2.3` tag yourself still builds and publishes the image, but doesn't write a release.

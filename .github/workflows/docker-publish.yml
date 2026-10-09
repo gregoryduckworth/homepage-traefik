@@ -6,6 +6,8 @@ on:
     tags: ["v*"]
   pull_request:
     branches: [main]
+  # Started by the Release workflow on the tag it creates, or by hand to rebuild an image.
+  workflow_dispatch:
 
 # Jobs can only read the repository unless they ask for more, as the publishing job does.
 permissions:
