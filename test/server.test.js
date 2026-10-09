@@ -1,9 +1,11 @@
 const { describe, it, before, after, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
+const net = require('node:net');
+const { once } = require('node:events');
 const os = require('node:os');
 const path = require('node:path');
-const { createServer, createRouteStore, readSeconds, readPort, readFrameAncestors } = require('../src/server');
+const { createServer, createRouteStore, shutDown, readSeconds, readPort, readFrameAncestors } = require('../src/server');
 const { createConfigStore } = require('../src/config');
 const { createEvents } = require('../src/events');
 
@@ -415,6 +417,36 @@ describe('server errors', () => {
     } finally {
       server.close();
     }
+  });
+});
+
+describe('shutDown', () => {
+  async function listening() {
+    const store = createRouteStore({ traefikUrl: 'http://traefik:8080', fetchImpl: async () => jsonResponse([]) });
+    const config = { read: async () => ({ groups: [], routes: {}, error: null }) };
+    const events = createEvents();
+    const server = createServer({ store, config, title: 'Lab', events });
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    return { server, events, port: server.address().port };
+  }
+
+  // Node 24's close() on its own waits for such a connection until the request times out, a minute later.
+  it('closes a connection that never sent a request instead of waiting for it', { timeout: 5000 }, async () => {
+    const { server, events, port } = await listening();
+    const socket = net.connect(port, '127.0.0.1');
+    await once(socket, 'connect');
+    const start = Date.now();
+    await shutDown({ server, events, graceMs: 100 });
+    assert.ok(Date.now() - start < 1000, `took ${Date.now() - start} ms`);
+    socket.destroy();
+  });
+
+  it('ends open event streams', { timeout: 5000 }, async () => {
+    const { server, events, port } = await listening();
+    const res = await fetch(`http://127.0.0.1:${port}/api/events`);
+    const ended = res.text();
+    await shutDown({ server, events, graceMs: 100 });
+    assert.match(await ended, /retry: 5000/);
   });
 });
 
