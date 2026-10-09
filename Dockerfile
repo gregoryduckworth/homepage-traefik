@@ -1,3 +1,4 @@
+# The current Node LTS. CI tests the same version, from .nvmrc, and checks the two match.
 FROM node:24-alpine
 
 ENV NODE_ENV=production
