@@ -92,7 +92,7 @@ How a router is shown:
 
 ## Health checks
 
-Each enabled route with a link is checked once per `HEALTHCHECK_INTERVAL_SECONDS` with a `HEAD` request, retried once with `GET` if that fails with a 5xx, a timeout or a reset. A strip across the top shows every route at a glance, and the info button on each route opens a details panel. The panel explains a failure in a sentence, for example "Connected to 172.18.0.2:443, but it didn't send a response within 10 seconds".
+Each enabled route with a link is checked once per `HEALTHCHECK_INTERVAL_SECONDS` with a `HEAD` request, retried once with `GET` if that fails with a 5xx, a timeout or a reset. Checks run when Traefik is polled, so the interval is rounded up to a whole number of polls: with the defaults (`POLL_INTERVAL_SECONDS=30`, `HEALTHCHECK_INTERVAL_SECONDS=60`) each route is checked every 60 seconds, and a 45-second interval also works out at every 60 seconds. Results are only kept in memory, so after a restart routes show as **Checking** until the first checks finish, a few seconds later. A strip across the top shows every route at a glance, and the info button on each route opens a details panel. The panel explains a failure in a sentence, for example "Connected to 172.18.0.2:443, but it didn't send a response within 10 seconds".
 
 | Status                     | Meaning                                                                                                                            |
 | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
@@ -126,15 +126,14 @@ Mount a folder at `/app/config` so your settings survive upgrades:
       - ./config:/app/config
 ```
 
-The server keeps three files there:
+The server keeps two files there:
 
 | File            | What's in it                                      | Back it up?             |
 | --------------- | ------------------------------------------------- | ----------------------- |
 | `homepage.json` | Your groups, names, icons and hidden routes       | Yes                     |
 | `icons.json`    | Icons found on your sites                         | No, it's only a cache   |
-| `health.json`   | Recent health checks, so a restart shows them     | No, it's only a cache   |
 
-`homepage.json` is only written when you change something on the page, so it's safe to keep in git. `health.json` is saved at most every 10 minutes and when the container stops, to spare SD cards.
+`homepage.json` is only written when you change something on the page, so it's safe to keep in git. Older versions also kept a `health.json` there; it's no longer used, so you can delete it.
 
 The container runs as UID 1000, which must be able to write to the folder. Create it before the first start (`mkdir config`); otherwise Docker creates it owned by root. On Linux, run `sudo chown 1000 config` if your UID isn't 1000. A named volume (`homepage-config:/app/config`) works too.
 
@@ -154,6 +153,19 @@ You can also edit `homepage.json` by hand. Changes show up without a restart, an
 ```
 
 Routes are identified by their full router name, shown as **Router** in the details panel. Entries for routers Traefik isn't serving right now are kept, and come back into place when the router returns.
+
+### Disk writes and SD cards
+
+The homepage is meant to run on a Raspberry Pi without wearing out its SD card. Health checks and icon lookups are network requests, and health results are only kept in memory, so the only writes are to the two files above:
+
+| File            | When it's written                                                                                                    |
+| --------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `homepage.json` | Only when you change something on the page                                                                           |
+| `icons.json`    | When a route's icon is found or changes, and when its daily re-check finishes: at most about once a day per route    |
+
+Each save writes a temporary file and renames it over the old one, so a power cut can't leave half a file.
+
+Apart from one line at startup, the server only logs when something goes wrong, but while Traefik is unreachable it logs one line per poll. Docker keeps container logs on disk, so a size limit such as `logging: { driver: local, options: { max-size: 1m } }` in your compose file keeps them small.
 
 ## API
 

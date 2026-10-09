@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const { normalizeGroups, normalizeRouteSettings, storedHealth, createConfigStore } = require('../src/config');
+const { normalizeGroups, normalizeRouteSettings, createConfigStore } = require('../src/config');
 
 describe('normalizeGroups', () => {
   it('trims group names and defaults missing routes to an empty list', () => {
@@ -233,17 +233,5 @@ describe('createConfigStore', () => {
     await fs.mkdir(path.dirname(file));
     await fs.writeFile(file, 'not json');
     await assert.rejects(createConfigStore({ file }).saveRoute('a@docker', { name: 'App' }), { status: 409 });
-  });
-});
-
-describe('storedHealth', () => {
-  it('keeps results that name a URL and when they were checked', () => {
-    const result = { url: 'http://a.test', reachable: true, checkedAt: '2026-01-01T00:00:00.000Z' };
-    assert.deepEqual([...storedHealth({ 'a@docker': result })], [['a@docker', result]]);
-  });
-
-  it('drops anything else', () => {
-    const health = { 'a@docker': { url: 'http://a.test' }, 'b@docker': { checkedAt: '2026-01-01T00:00:00.000Z' }, 'c@docker': null };
-    for (const value of [undefined, {}, [], 'yes', health]) assert.equal(storedHealth(value).size, 0);
   });
 });
