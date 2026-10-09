@@ -8,6 +8,7 @@ const { findIcon, iconLinks, sniffImage, parseSavedIcons, createIconStore } = re
 const TIMEOUT_MS = 500;
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
 const ICO = Buffer.from([0, 0, 1, 0, 1, 0, 16, 16]);
+const SVG_NS = 'http://www.w3.org/2000/svg';
 const servers = [];
 
 // Loopback servers stand in for routes. Each serves the paths in `files` and 404s everything else.
@@ -55,8 +56,24 @@ describe('iconLinks', () => {
     assert.deepEqual(iconLinks(html, 'http://app.test/start'), ['http://app.test/web/favicon.png?a=1&b=2']);
   });
 
-  it('skips links that are not http or https', () => {
-    assert.deepEqual(iconLinks('<link rel="icon" href="data:image/png;base64,AAAA">', 'http://app.test/'), []);
+  it('skips links that are not http, https or data', () => {
+    assert.deepEqual(iconLinks('<link rel="icon" href="ftp://app.test/favicon.png">', 'http://app.test/'), []);
+  });
+
+  it('reads an inline SVG icon whose data: URL contains ">", and ranks it as an SVG', () => {
+    const svg = `data:image/svg+xml,<svg xmlns='${SVG_NS}' viewBox='0 0 100 100'><text y='.9em'>A</text></svg>`;
+    const html = `<link rel="apple-touch-icon" href="/touch.png"><link rel="icon" href="${svg}">`;
+    assert.deepEqual(iconLinks(html, 'http://app.test/'), [new URL(svg).href, 'http://app.test/touch.png']);
+  });
+
+  it('reads no links after a tag whose quote is never closed, as browsers do', () => {
+    const html = `<link rel="icon" href="/a.png"><link rel='icon href=/x.png><link rel="icon" href="/b.png">`;
+    assert.deepEqual(iconLinks(html, 'http://app.test/'), ['http://app.test/a.png']);
+  });
+
+  it('does not take text inside an attribute value for one of the tag\'s attributes', () => {
+    const html = `<link title="rel=icon href=/fake.png" rel="stylesheet" href="/app.css">`;
+    assert.deepEqual(iconLinks(html, 'http://app.test/'), []);
   });
 });
 
@@ -67,8 +84,16 @@ describe('sniffImage', () => {
     ['GIF', Buffer.from('GIF89a......'), 'image/gif'],
     ['JPEG', Buffer.from([0xff, 0xd8, 0xff, 0xe0]), 'image/jpeg'],
     ['WebP', Buffer.from('RIFF\0\0\0\0WEBPVP8 '), 'image/webp'],
-    ['SVG', Buffer.from('<?xml version="1.0"?>\n<svg xmlns="http://www.w3.org/2000/svg"></svg>'), 'image/svg+xml'],
-    ['an HTML page that contains an SVG', Buffer.from('<html><body><svg></svg></body></html>'), null],
+    ['SVG', Buffer.from(`<?xml version="1.0"?>\n<svg xmlns="${SVG_NS}"></svg>`), 'image/svg+xml'],
+    ['SVG with a byte order mark, doctype and processing instruction', Buffer.from(
+      `\uFEFF<?xml version="1.0"?><?xml-stylesheet href="a.css"?><!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "x.dtd" [<!ENTITY a "b">]><svg xmlns="${SVG_NS}"/>`,
+    ), 'image/svg+xml'],
+    ['SVG after a comment longer than 4 KB', Buffer.from(`<!-- ${'licence '.repeat(1000)} --><svg xmlns="${SVG_NS}"></svg>`), 'image/svg+xml'],
+    ['SVG that embeds HTML', Buffer.from(`<svg xmlns="${SVG_NS}"><foreignObject><html xmlns="http://www.w3.org/1999/xhtml"></html></foreignObject></svg>`), 'image/svg+xml'],
+    ['SVG without the SVG namespace', Buffer.from('<svg viewBox="0 0 10 10"></svg>'), null],
+    ['an HTML page that contains an SVG', Buffer.from(`<html><body><svg xmlns="${SVG_NS}"></svg></body></html>`), null],
+    ['an HTML page with no <html> tag that starts with an SVG', Buffer.from(`<!doctype html><svg xmlns="${SVG_NS}"></svg>`), null],
+    ['an SVG only inside a comment', Buffer.from(`<!-- <svg xmlns="${SVG_NS}"> --><p>Sign in</p>`), null],
     ['plain text', Buffer.from('Not found'), null],
     ['an empty body', Buffer.alloc(0), null],
   ];
@@ -92,6 +117,28 @@ describe('findIcon', () => {
 
   it('falls back to /favicon.ico when the page links to no icon', async () => {
     const base = await site({ '/': page('<title>App</title>'), '/favicon.ico': { body: ICO } });
+    const icon = await findIcon(`${base}/`, { timeoutMs: TIMEOUT_MS });
+    assert.equal(icon.type, 'image/x-icon');
+  });
+
+  it('uses an SVG icon inlined in the page as a data: URL', async () => {
+    const svg = `<svg xmlns="${SVG_NS}" viewBox="0 0 10 10"><rect width="10" height="10" fill="#f00"/></svg>`;
+    const base = await site({
+      '/': page(`<link rel="icon" href="data:image/svg+xml,${encodeURIComponent(svg)}">`),
+      '/favicon.ico': { body: ICO },
+    });
+    const icon = await findIcon(`${base}/`, { timeoutMs: TIMEOUT_MS });
+    assert.deepEqual([icon.type, icon.body.toString()], ['image/svg+xml', svg]);
+  });
+
+  it('decodes a base64 data: icon', async () => {
+    const base = await site({ '/': page(`<link rel="icon" href="data:image/png;base64,${PNG.toString('base64')}">`) });
+    const icon = await findIcon(`${base}/`, { timeoutMs: TIMEOUT_MS });
+    assert.deepEqual([icon.type, icon.body], ['image/png', PNG]);
+  });
+
+  it('skips a data: icon that is not an image', async () => {
+    const base = await site({ '/': page('<link rel="icon" href="data:text/plain,hello">'), '/favicon.ico': { body: ICO } });
     const icon = await findIcon(`${base}/`, { timeoutMs: TIMEOUT_MS });
     assert.equal(icon.type, 'image/x-icon');
   });

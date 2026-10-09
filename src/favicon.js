@@ -90,9 +90,32 @@ function decodeEntities(text) {
   return text.replace(/&(amp|quot|#39|apos|lt|gt);/g, (_, name) => ({ amp: '&', quot: '"', '#39': "'", apos: "'", lt: '<', gt: '>' })[name]);
 }
 
-function attr(tag, name) {
-  const match = tag.match(new RegExp(`\\s${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s"'>]+))`, 'i'));
-  return match ? decodeEntities(match[1] ?? match[2] ?? match[3]).trim() : null;
+// Every <name ...> tag in `html`. A quoted attribute value may contain ">", as an inline SVG icon's data: URL does.
+// A tag that never closes, say for a quote left open, runs to the end of the page as it does in browsers, so nothing
+// after it is a tag; stopping there also keeps a page full of them from being scanned to the end once per tag.
+function tags(html, name) {
+  const start = new RegExp(`<${name}\\b`, 'gi');
+  const rest = /(?:[^>"']|"[^"]*"|'[^']*')*>/y;
+  const found = [];
+  for (let match; (match = start.exec(html));) {
+    rest.lastIndex = start.lastIndex;
+    const end = rest.exec(html);
+    if (!end) break;
+    found.push(match[0] + end[0]);
+    start.lastIndex = rest.lastIndex;
+  }
+  return found;
+}
+
+// A tag's attributes by lower-cased name, the first of each name winning as it does in browsers. Attributes are read
+// in order, so text inside a quoted value, such as an inline SVG's own attributes, isn't taken for one of the tag's.
+function attributes(tag) {
+  const found = new Map();
+  for (const [, name, ...values] of tag.matchAll(/([^\s"'<>/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+)))?/g)) {
+    const key = name.toLowerCase();
+    if (!found.has(key)) found.set(key, decodeEntities(values.find(value => value !== undefined) ?? '').trim());
+  }
+  return found;
 }
 
 // The largest side listed in a sizes attribute, with "any" (a scalable icon) counting as large.
@@ -103,23 +126,26 @@ function largestSize(sizes) {
 
 // Icons the page links to, best first: SVG icons scale cleanly, apple-touch-icons are large PNGs, and other icons
 // are tried largest first. Relative links are resolved against the page's <base>, if any, then the page itself.
+// Icons inlined in the page as data: URLs count too.
 function iconLinks(html, pageUrl) {
-  const baseHref = attr(html.match(/<base\b[^>]*>/i)?.[0] || '', 'href');
+  const baseHref = attributes(tags(html, 'base')[0] || '').get('href');
   const base = baseHref && URL.canParse(baseHref, pageUrl) ? new URL(baseHref, pageUrl).href : pageUrl;
   const links = [];
-  for (const [tag] of html.matchAll(/<link\b[^>]*>/gi)) {
-    const rel = (attr(tag, 'rel') || '').toLowerCase().split(/\s+/);
-    const href = attr(tag, 'href');
+  for (const tag of tags(html, 'link')) {
+    const attrs = attributes(tag);
+    const rel = (attrs.get('rel') || '').toLowerCase().split(/\s+/);
+    const href = attrs.get('href');
     if (!href || !URL.canParse(href, base)) continue;
     const url = new URL(href, base);
-    if (!/^https?:$/.test(url.protocol)) continue;
-    const svg = /svg/i.test(attr(tag, 'type') || '') || /\.svg$/i.test(url.pathname);
+    if (!/^(https?|data):$/.test(url.protocol)) continue;
+    // A data: URL's "path" is its media type and contents, such as image/svg+xml,<svg ...>.
+    const svg = /svg/i.test(attrs.get('type') || '') || (url.protocol === 'data:' ? /^image\/svg\+xml[;,]/i : /\.svg$/i).test(url.pathname);
     let rank;
     if (rel.includes('icon') && svg) rank = 0;
     else if (rel.includes('apple-touch-icon') || rel.includes('apple-touch-icon-precomposed')) rank = 1;
     else if (rel.includes('icon')) rank = 2;
     else continue;
-    links.push({ url: url.href, rank, size: largestSize(attr(tag, 'sizes')) });
+    links.push({ url: url.href, rank, size: largestSize(attrs.get('sizes')) });
   }
   return links.sort((a, b) => a.rank - b.rank || b.size - a.size).map(link => link.url);
 }
@@ -133,15 +159,37 @@ function sniffImage(body) {
   if (body.subarray(0, 4).toString('latin1') === 'GIF8') return 'image/gif';
   if (body[0] === 0xff && body[1] === 0xd8 && body[2] === 0xff) return 'image/jpeg';
   if (body.subarray(0, 4).toString('latin1') === 'RIFF' && body.subarray(8, 12).toString('latin1') === 'WEBP') return 'image/webp';
-  const head = body.subarray(0, 4096).toString('utf8');
-  if (/<svg[\s>]/i.test(head) && !/<html[\s>]/i.test(head)) return 'image/svg+xml';
+  if (isSvg(body.toString('utf8'))) return 'image/svg+xml';
   return null;
+}
+
+// Whitespace, an XML declaration, a comment, a processing instruction or an svg doctype: what may come before an SVG
+// file's root element.
+const SVG_PROLOG = /^(?:\s+|<\?[\s\S]*?\?>|<!--[\s\S]*?-->|<!DOCTYPE\s+svg\b[^>[]*(?:\[[\s\S]*?\][^>]*)?>)/;
+
+// Whether `text` is an SVG file: XML whose root element is an <svg> in the SVG namespace, which browsers won't draw
+// without. Only the prolog may come before it, so an HTML page that contains an <svg> isn't one, however it starts.
+function isSvg(text) {
+  let rest = text.replace(/^\uFEFF/, '');
+  for (let match; (match = rest.match(SVG_PROLOG));) rest = rest.slice(match[0].length);
+  const root = rest.match(/^<svg(?=[\s/>])(?:[^>"']|"[^"]*"|'[^']*')*>/)?.[0];
+  return Boolean(root) && attributes(root).get('xmlns') === 'http://www.w3.org/2000/svg';
 }
 
 // The icon in `body`, or null when it isn't an image.
 function iconOf(body) {
   const type = sniffImage(body);
   return type && { type, body, hash: crypto.createHash('sha1').update(body).digest('hex').slice(0, 12) };
+}
+
+// The bytes at an icon's URL. A data: URL holds them itself, so it's decoded rather than fetched.
+async function load(url, opts) {
+  if (url.startsWith('data:')) {
+    const body = Buffer.from(await (await fetch(url)).arrayBuffer());
+    if (body.length > MAX_ICON_BYTES) throw new Error(`Larger than ${MAX_ICON_BYTES} bytes`);
+    return body;
+  }
+  return (await get(url, { ...opts, maxBytes: MAX_ICON_BYTES })).body;
 }
 
 // Looks for a route's icon the way a browser would: the icons its page links to, then /favicon.ico.
@@ -160,7 +208,7 @@ async function findIcon(pageUrl, { timeoutMs = DEFAULT_TIMEOUT_MS, address, look
 
   for (const url of new Set(candidates)) {
     try {
-      const icon = iconOf((await get(url, { ...opts, maxBytes: MAX_ICON_BYTES })).body);
+      const icon = iconOf(await load(url, opts));
       if (icon) return icon;
     } catch {
       // Try the next candidate.
