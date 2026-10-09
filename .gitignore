@@ -4,5 +4,6 @@ config
 .playwright-mcp
 homepage.json
 icons.json
+health.json
 test-results
 playwright-report

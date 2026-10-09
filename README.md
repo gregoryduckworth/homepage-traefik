@@ -74,7 +74,7 @@ services:
 | `HEALTHCHECK_ADDRESS`          | (unset)                | Host or IP to send health checks to instead of resolving each route's hostname, for example `traefik` (see below) |
 | `ENTRYPOINT_PORTS`             | (unset)                | Ports that entry points not on 80 or 443 are reached on, for example `websecure:8443,web:8080` (see below)        |
 | `HOMEPAGE_TITLE`               | `Routes`               | Heading and browser tab title                                                                                     |
-| `CONFIG_FILE`                  | `config/homepage.json` | Stores your groups, names, icons and latest health checks (`/app/config/homepage.json` in the image)              |
+| `CONFIG_FILE`                  | `config/homepage.json` | Stores your groups, names and icons (`/app/config/homepage.json` in the image)                                    |
 | `PORT`                         | `3000`                 | Port the homepage listens on                                                                                      |
 | `FRAME_ANCESTORS`              | `'self'`               | Sites allowed to show the homepage in a frame, separated by spaces, for example `https://dash.example.com` or `*` |
 
@@ -87,7 +87,7 @@ services:
 - Routers without a `Host` rule (for example `HostRegexp` or path-only rules) are listed without a link.
 - TCP routers are listed too, without a link, with their `HostSNI` hostname underneath (or their rule, for ``HostSNI(`*`)``). They aren't health-checked, because there's no web address to request. Their router name starts with `tcp:`, such as `tcp:postgres@docker`, so they can't be mixed up with an HTTP router of the same name in the groups file.
 - Disabled routers, and routers that have warnings, are marked as such.
-- Each enabled route with a link gets a live status, and a strip at the top shows every route's status at a glance. The server sends a `HEAD` request to the route's URL, at most 8 at a time, each on a fresh connection. Each route is checked once every `HEALTHCHECK_INTERVAL_SECONDS`, on the first Traefik poll after its last check is that old, so lower `POLL_INTERVAL_SECONDS` doesn't mean more checks. A route that's new, or whose URL changed, is checked on the next poll. The latest result for each route is saved in the groups file (see [Groups](#groups)), so after a restart the page shows it straight away and the route isn't checked again until its interval is up:
+- Each enabled route with a link gets a live status, and a strip at the top shows every route's status at a glance. The server sends a `HEAD` request to the route's URL, at most 8 at a time, each on a fresh connection. Each route is checked once every `HEALTHCHECK_INTERVAL_SECONDS`, on the first Traefik poll after its last check is that old, so lower `POLL_INTERVAL_SECONDS` doesn't mean more checks. A route that's new, or whose URL changed, is checked on the next poll. The latest result for each route is saved in `health.json` beside `CONFIG_FILE`, so after a restart the page shows it straight away and the route isn't checked again until its interval is up:
   - Any HTTP response below 500 shows as **Up**, with its response time.
   - The exception is the plain `404 page not found` that Traefik sends when none of its routers match the hostname. That shows as **No router**, a warning, because the check never reached the route. It usually means the check went to a different Traefik, or to an entry point the route isn't on. For example, `HEALTHCHECK_ADDRESS` might point at a Traefik that doesn't serve the route, or the route's hostname might resolve to a different machine from inside the container. An app written in Go that answers with Go's default 404 looks the same.
   - If `HEAD` gets a 5xx, times out or has its connection reset, the check is tried once more with `GET`, because some apps don't answer `HEAD` properly. A 5xx from that `GET` shows its status code.
@@ -148,7 +148,7 @@ Groups are saved on the server, so everyone who opens the page sees the same lay
 - Groups appear in the order they are listed, above the entrypoint groups, and routes appear in the order they are listed within each group.
 - A route is identified by its Traefik router name, shown as **Router** in its details panel. If a route is in more than one group, only the first one counts.
 - Routes that Traefik isn't serving right now stay in the file and return to their group when they come back.
-- The server also keeps the latest health check of each route in the file, under `health`. It rewrites that section after each round of checks (once per `HEALTHCHECK_INTERVAL_SECONDS` at most, or when routes are added or removed), and leaves `groups` and anything else in the file as it is. You don't need to edit it; deleting it just means every route is checked again on the next poll.
+- The server only writes this file when you change something on the page, and leaves anything else in it as it is. Health checks are kept in `health.json` beside it, which is only a cache: deleting it just means every route is checked again on the next poll. (Older versions kept them in this file under `health`; that section is used until `health.json` exists, and dropped the next time you save a change.)
 - The page picks up changes to the file within one refresh, without a restart. If the file isn't valid, the page says why and keeps showing the last groups it loaded, and changes from the page are refused until the file is fixed.
 
 Anyone who can open the homepage can change the groups, names and icons. So that another site can't trick someone into making those changes, other sites can't show the homepage in a frame. If you show it inside another dashboard, set `FRAME_ANCESTORS` to that dashboard's address, for example `https://dash.example.com`.
@@ -162,7 +162,7 @@ Mount a `config` folder into the container so your settings survive rebuilds and
       - ./config:/app/config
 ```
 
-The server keeps two files in it, and creates them when it first needs them: `homepage.json` (your groups, names and icons, and the latest health checks) and `icons.json` (the icons found on your sites).
+The server keeps three files in it, and creates them when it first needs them: `homepage.json` (your groups, names and icons), `icons.json` (the icons found on your sites) and `health.json` (the latest health checks). Only `homepage.json` is worth backing up or committing; the other two are caches.
 
 - Create the folder before the first `docker compose up` (`mkdir config`). To bring settings from another setup, copy its `homepage.json` into the folder.
 - The container runs as the `node` user (UID 1000), which needs to be able to write to the folder. On Linux, if your user's UID isn't 1000, run `sudo chown 1000 config`, or set `user:` on the service to your own UID. If the folder doesn't exist, Docker creates it owned by root, and changes made on the page fail with an error saying the file can't be written. Docker Desktop and Colima on a Mac don't need this, but the folder must be somewhere they share with Docker; both share your home folder by default.

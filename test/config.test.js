@@ -175,15 +175,14 @@ describe('createConfigStore', () => {
     assert.deepEqual(groups, [{ name: 'Second', routes: [] }]);
   });
 
-  it('saves health results beside the groups without changing them', async () => {
-    const store = createConfigStore({ file });
-    await store.saveGroups([{ name: 'Media', routes: ['a@docker'] }]);
+  it('drops health results an older version saved in the file when saving a change', async () => {
+    await fs.mkdir(path.dirname(file));
     const health = { 'a@docker': { url: 'http://a.test', reachable: true, checkedAt: '2026-01-01T00:00:00.000Z' } };
-    assert.equal(await store.saveHealth(health), true);
-    const saved = JSON.parse(await fs.readFile(file, 'utf8'));
-    assert.deepEqual(saved, { groups: [{ name: 'Media', routes: ['a@docker'] }], health });
-    await store.saveGroups([{ name: 'Tools' }]);
-    assert.deepEqual(JSON.parse(await fs.readFile(file, 'utf8')).health, health);
+    await fs.writeFile(file, JSON.stringify({ groups: [], health, theme: 'kept' }));
+    const store = createConfigStore({ file });
+    await store.saveGroups([{ name: 'Media' }]);
+    assert.deepEqual(JSON.parse(await fs.readFile(file, 'utf8')), { groups: [{ name: 'Media', routes: [] }], theme: 'kept' });
+    assert.equal((await store.read()).doc.health, undefined);
   });
 
   it('reads route names and icons from the file', async () => {
@@ -235,23 +234,16 @@ describe('createConfigStore', () => {
     await fs.writeFile(file, 'not json');
     await assert.rejects(createConfigStore({ file }).saveRoute('a@docker', { name: 'App' }), { status: 409 });
   });
-
-  it('does not save health results over a file that does not parse', async () => {
-    await fs.mkdir(path.dirname(file));
-    await fs.writeFile(file, 'not json');
-    assert.equal(await createConfigStore({ file }).saveHealth({}), false);
-    assert.equal(await fs.readFile(file, 'utf8'), 'not json');
-  });
 });
 
 describe('storedHealth', () => {
   it('keeps results that name a URL and when they were checked', () => {
     const result = { url: 'http://a.test', reachable: true, checkedAt: '2026-01-01T00:00:00.000Z' };
-    assert.deepEqual([...storedHealth({ health: { 'a@docker': result } })], [['a@docker', result]]);
+    assert.deepEqual([...storedHealth({ 'a@docker': result })], [['a@docker', result]]);
   });
 
   it('drops anything else', () => {
     const health = { 'a@docker': { url: 'http://a.test' }, 'b@docker': { checkedAt: '2026-01-01T00:00:00.000Z' }, 'c@docker': null };
-    for (const doc of [{}, { health: [] }, { health: 'yes' }, { health }]) assert.equal(storedHealth(doc).size, 0);
+    for (const value of [undefined, {}, [], 'yes', health]) assert.equal(storedHealth(value).size, 0);
   });
 });

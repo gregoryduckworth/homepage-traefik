@@ -312,26 +312,31 @@ if (require.main === module) {
     address: process.env.HEALTHCHECK_ADDRESS || undefined,
   };
 
-  // Icons found on the sites are saved beside the config file, so a restart shows them straight away.
+  // Icons found on the sites and the latest health checks are saved beside the config file, so a restart shows them
+  // straight away. Both are only caches, so a file that can't be read is warned about and started afresh.
   const iconsFile = path.join(path.dirname(configFile), 'icons.json');
-  const loadIcons = () => fs.readFile(iconsFile, 'utf8').then(parseSavedIcons).catch(err => {
+  const healthFile = path.join(path.dirname(configFile), 'health.json');
+  const loadCache = (file, parse) => fs.readFile(file, 'utf8').then(parse).catch(err => {
     if (err.code === 'EISDIR') {
-      console.warn(`${iconsFile} is a directory, not a file, so icons won't be saved. Docker creates a directory when the file you mount doesn't exist on the host: create the file (an empty one is fine), remove the directory Docker made and recreate the container`);
+      console.warn(`${file} is a directory, not a file, so it won't be saved. Docker creates a directory when the file you mount doesn't exist on the host: create the file (an empty one is fine), remove the directory Docker made and recreate the container`);
     } else if (err.code !== 'ENOENT') {
-      console.warn(`Ignoring ${iconsFile}: ${err.message}`);
+      console.warn(`Ignoring ${file}: ${err.message}`);
     }
-    return new Map();
+    return null;
   });
+  const parseHealth = text => storedHealth(text.trim() ? JSON.parse(text) : {});
 
   const config = createConfigStore({ file: configFile });
   const events = createEvents();
 
-  Promise.all([config.read(), loadIcons()]).then(([{ doc }, savedIcons]) => {
-    const store = createRouteStore({ traefikUrl, fetchImpl: fetch, entryPointPorts, healthOptions, healthIntervalMs: healthSeconds * 1000, health: storedHealth(doc) });
+  Promise.all([config.read(), loadCache(iconsFile, parseSavedIcons), loadCache(healthFile, parseHealth)]).then(([{ doc }, savedIcons, savedHealth]) => {
+    // Older versions saved health checks in the config file, so they're used until health.json has been written.
+    const health = savedHealth ?? storedHealth(doc.health);
+    const store = createRouteStore({ traefikUrl, fetchImpl: fetch, entryPointPorts, healthOptions, healthIntervalMs: healthSeconds * 1000, health });
     // Icons are looked up even for routes with one set in the config file, so the page can fall back to the
     // site's own icon if that one doesn't load.
-    const icons = createIconStore({ options: healthOptions, saved: savedIcons, onChange: events.notify });
-    const saveHealth = saveQuietly(`Saving health checks to ${configFile}`, () => config.saveHealth(store.getHealth()));
+    const icons = createIconStore({ options: healthOptions, saved: savedIcons ?? new Map(), onChange: events.notify });
+    const saveHealth = saveQuietly(`Saving health checks to ${healthFile}`, () => writeSafely(healthFile, `${JSON.stringify(store.getHealth(), null, 2)}\n`));
     const saveIcons = saveQuietly(`Saving icons to ${iconsFile}`, () => writeSafely(iconsFile, icons.serialize()));
     const refreshIcons = () => icons.refresh(store.getRoutesWithHealth()).then(changed => changed && saveIcons(), err => {
       console.error(`Looking up route icons failed: ${err.message}`);
