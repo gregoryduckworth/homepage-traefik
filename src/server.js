@@ -21,6 +21,17 @@ const MIME_TYPES = {
 
 const MAX_BODY_BYTES = 64 * 1024;
 
+// The page only loads its own files, apart from route icons, which can be any http:// or https:// image set on the
+// page. So even if a route's name or rule managed to get into the page as markup, it couldn't run script or send
+// data anywhere.
+const PAGE_CSP = "default-src 'self'; img-src 'self' http: https:; object-src 'none'; base-uri 'none'";
+
+// The page's own files are checked with the server on each load, so an upgrade shows up straight away, and come back
+// as 304s when they haven't changed. The fonts never change, so browsers keep them for a week without asking.
+function cacheControlFor(filePath) {
+  return path.extname(filePath) === '.woff2' ? 'public, max-age=604800' : 'no-cache';
+}
+
 // Ticks start a little later each time, by however long the Traefik request took, so a route checked one interval
 // ago can look a moment too young. Without some slack it would wait a whole extra tick.
 const DUE_SLACK_MS = 2000;
@@ -180,7 +191,7 @@ function createServer({ store, config, title, icons = { get: () => null }, event
   return http.createServer(async (req, res) => {
     const { pathname } = new URL(req.url, 'http://localhost');
     res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('Content-Security-Policy', `frame-ancestors ${frameAncestors}`);
+    res.setHeader('Content-Security-Policy', `${PAGE_CSP}; frame-ancestors ${frameAncestors}`);
 
     if (pathname === '/api/routes') {
       const { groups, routes: settings, error: configError } = await config.read();
@@ -229,8 +240,15 @@ function createServer({ store, config, title, icons = { get: () => null }, event
     try {
       const filePath = path.resolve(PUBLIC_DIR, `.${pathname === '/' ? '/index.html' : decodeURIComponent(pathname)}`);
       if (!filePath.startsWith(PUBLIC_DIR + path.sep)) throw new Error('outside public dir');
+      const stat = await fs.stat(filePath);
+      const etag = `W/"${stat.size.toString(16)}-${Math.floor(stat.mtimeMs).toString(16)}"`;
+      const headers = { ETag: etag, 'Cache-Control': cacheControlFor(filePath) };
+      if (req.headers['if-none-match'] === etag) {
+        res.writeHead(304, headers).end();
+        return;
+      }
       const data = await fs.readFile(filePath);
-      res.writeHead(200, { 'Content-Type': MIME_TYPES[path.extname(filePath)] || 'application/octet-stream' });
+      res.writeHead(200, { ...headers, 'Content-Type': MIME_TYPES[path.extname(filePath)] || 'application/octet-stream' });
       res.end(data);
     } catch {
       res.writeHead(404, { 'Content-Type': 'text/plain' }).end('Not found');
