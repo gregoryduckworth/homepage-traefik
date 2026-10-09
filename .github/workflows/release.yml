@@ -1,0 +1,100 @@
+name: Release
+
+# Run from the Actions tab. Works out the next version from the latest v* tag, tags the tip of main with it, writes a
+# GitHub release with notes from the pull requests merged since the last one, and starts the image build for the tag,
+# which publishes it as 1.2.3 and 1.2 as well as the commit's own tags.
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Which part of the version to raise (1.2.3 becomes 1.2.4, 1.3.0 or 2.0.0)
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+      version:
+        description: Or an exact version, such as 1.0.0, instead of raising one part
+        type: string
+        required: false
+
+permissions:
+  contents: write # create the tag and the release
+  actions: write # start the image build
+
+# One release at a time, so two runs can't pick the same version.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the run is from main
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::Releases are made from main. Choose main in \"Use workflow from\" and run it again."
+          exit 1
+
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # every tag, to find the latest version
+
+      - name: Work out the version
+        id: version
+        env:
+          BUMP: ${{ inputs.bump }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          released=$(git tag --points-at HEAD | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n1 || true)
+          if [ -n "$released" ]; then
+            echo "::error::$(git rev-parse --short HEAD) is already released as $released. Merge something new first."
+            exit 1
+          fi
+
+          latest=$(git tag --list 'v*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n1 || true)
+          if [ -n "$VERSION" ]; then
+            next="${VERSION#v}"
+            if ! [[ "$next" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::\"$VERSION\" isn't a version like 1.2.3."
+              exit 1
+            fi
+          else
+            # With no release yet, the first is raised from 0.0.0: choose major for 1.0.0.
+            IFS=. read -r major minor patch <<< "${latest#v}"
+            major=${major:-0} minor=${minor:-0} patch=${patch:-0}
+            case "$BUMP" in
+              major) next="$((major + 1)).0.0" ;;
+              minor) next="$major.$((minor + 1)).0" ;;
+              *) next="$major.$minor.$((patch + 1))" ;;
+            esac
+          fi
+
+          if git rev-parse -q --verify "refs/tags/v$next" > /dev/null; then
+            echo "::error::v$next already exists."
+            exit 1
+          fi
+          if [ -n "$latest" ] && [ "$(printf '%s\n%s\n' "${latest#v}" "$next" | sort -V | tail -n1)" != "$next" ]; then
+            echo "::error::$next is older than the latest release, $latest."
+            exit 1
+          fi
+          echo "Releasing v$next (previous: ${latest:-none})"
+          echo "tag=v$next" >> "$GITHUB_OUTPUT"
+
+      - name: Tag and write the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "$TAG" --generate-notes
+
+      # A tag made with this workflow's token doesn't start other workflows, so the image build is started directly.
+      - name: Build and publish the image
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          gh workflow run docker-publish.yml --repo "$GITHUB_REPOSITORY" --ref "$TAG"
+          {
+            echo "Released [$TAG]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$TAG)."
+            echo "The image is building in [Build and Push Docker Image]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/workflows/docker-publish.yml) and will be published as \`ghcr.io/$GITHUB_REPOSITORY:${TAG#v}\`."
+          } >> "$GITHUB_STEP_SUMMARY"
