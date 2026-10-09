@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const { createServer, createRouteStore, atMostEvery, readSeconds, readPort, readFrameAncestors } = require('../src/server');
+const { createServer, createRouteStore, readSeconds, readPort, readFrameAncestors } = require('../src/server');
 const { createConfigStore } = require('../src/config');
 const { createEvents } = require('../src/events');
 
@@ -353,34 +353,32 @@ describe('createRouteStore health checks', () => {
     assert.deepEqual(checked, [['a@docker', 'b@docker'], ['a@docker']]);
   });
 
-  it('starts from saved results and waits out their interval', async () => {
-    const saved = new Map([
-      ['a@docker', { url: 'http://a.test', reachable: true, statusCode: 204, checkedAt: new Date(clock - HOUR / 2).toISOString() }],
-      ['b@docker', { url: 'http://b.test', reachable: true, statusCode: 200, checkedAt: new Date(clock - HOUR).toISOString() }],
-    ]);
-    const store = makeStore({ health: saved });
+  it('has no results until the first check', async () => {
+    const store = makeStore();
     await store.refresh();
+    assert.equal(store.getRoutesWithHealth()[0].health, null);
     await store.refreshHealth();
-    assert.deepEqual(checked, [['b@docker']]);
-    assert.equal(store.getRoutesWithHealth()[0].health.statusCode, 204);
+    assert.equal(store.getRoutesWithHealth()[0].health.statusCode, 200);
   });
 
-  it('forgets routes Traefik no longer serves', async () => {
+  it('forgets routes Traefik no longer serves, so one that comes back is checked afresh', async () => {
     const store = makeStore();
     await store.refresh();
     await store.refreshHealth();
-    routers.pop();
+    const b = routers.pop();
     await store.refresh();
     assert.equal(await store.refreshHealth(), true);
-    assert.deepEqual(Object.keys(store.getHealth()), ['a@docker']);
+    routers.push(b);
+    await store.refresh();
+    await store.refreshHealth();
+    assert.deepEqual(checked, [['a@docker', 'b@docker'], ['b@docker']]);
   });
 
-  it('keeps saved results while Traefik has not answered yet', async () => {
-    const saved = new Map([['a@docker', { url: 'http://a.test', checkedAt: new Date(clock).toISOString() }]]);
-    const store = makeStore({ health: saved, fetchImpl: async () => { throw new Error('down'); } });
+  it('checks nothing while Traefik has not answered yet', async () => {
+    const store = makeStore({ fetchImpl: async () => { throw new Error('down'); } });
     await store.refresh();
     assert.equal(await store.refreshHealth(), false);
-    assert.deepEqual(Object.keys(store.getHealth()), ['a@docker']);
+    assert.deepEqual(checked, []);
   });
 
   it('reports whether the routes or the error changed', async () => {
@@ -394,7 +392,7 @@ describe('createRouteStore health checks', () => {
     assert.equal(await failing.refresh(), false);
   });
 
-  it('reports nothing to save when no route was due', async () => {
+  it('reports no change when no route was due', async () => {
     const store = makeStore();
     await store.refresh();
     await store.refreshHealth();
@@ -417,44 +415,6 @@ describe('server errors', () => {
     } finally {
       server.close();
     }
-  });
-});
-
-describe('atMostEvery', () => {
-  function setup() {
-    let time = 0;
-    let runs = 0;
-    const saver = atMostEvery(1000, async () => { runs++; }, () => time);
-    return { saver, runs: () => runs, advance: ms => { time += ms; } };
-  }
-
-  it('runs the first request straight away', async () => {
-    const { saver, runs } = setup();
-    await saver.request();
-    assert.equal(runs(), 1);
-  });
-
-  it('holds back requests within the interval and runs them with the next one after it', async () => {
-    const { saver, runs, advance } = setup();
-    await saver.request();
-    advance(500);
-    await saver.request();
-    await saver.request();
-    assert.equal(runs(), 1);
-    advance(500);
-    await saver.request();
-    assert.equal(runs(), 2);
-  });
-
-  it('runs a held-back request when flushed, and nothing when none is waiting', async () => {
-    const { saver, runs, advance } = setup();
-    await saver.request();
-    await saver.flush();
-    assert.equal(runs(), 1);
-    advance(10);
-    await saver.request();
-    await saver.flush();
-    assert.equal(runs(), 2);
   });
 });
 

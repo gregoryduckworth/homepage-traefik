@@ -70,13 +70,6 @@ function normalizeRouteSettings(input) {
     .filter(([, setting]) => setting));
 }
 
-// Saved health results, keyed by route id. They're only a cache, so entries that don't look like one are dropped
-// rather than reported.
-function storedHealth(health) {
-  const entries = health && typeof health === 'object' && !Array.isArray(health) ? Object.entries(health) : [];
-  return new Map(entries.filter(([, result]) => result && typeof result.url === 'string' && !Number.isNaN(Date.parse(result.checkedAt))));
-}
-
 function parseConfig(text) {
   // An empty file (say, one just created with touch so it can be mounted) means no groups yet.
   if (!text.trim()) return { doc: {}, groups: [], routes: {} };
@@ -140,8 +133,8 @@ function createConfigStore({ file }) {
 
   // Writes `doc` and caches it along with the parsed fields it changed. Caching what was written rather than
   // re-reading it matters: two saves of the same size within the file system's timestamp resolution would otherwise
-  // look unchanged and return the earlier contents. Health checks used to be saved here and now have a file of
-  // their own, so any left from an older version are dropped.
+  // look unchanged and return the earlier contents. Older versions saved health checks here, which are no longer
+  // kept, so any left over are dropped.
   async function commit(current, { health: _health, ...doc }, changed = {}) {
     try {
       await writeSafely(file, `${JSON.stringify(doc, null, 2)}\n`);
@@ -181,4 +174,4 @@ function createConfigStore({ file }) {
   return { file, read, saveGroups, saveRoute };
 }
 
-module.exports = { ConfigError, normalizeGroups, normalizeRouteSettings, storedHealth, createConfigStore };
+module.exports = { ConfigError, normalizeGroups, normalizeRouteSettings, createConfigStore };

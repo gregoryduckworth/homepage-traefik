@@ -3,7 +3,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { fetchRouters, normalizeRouters, parseEntryPointPorts } = require('./traefik');
 const { checkAllRoutes, isCheckable } = require('./healthcheck');
-const { ConfigError, storedHealth, createConfigStore } = require('./config');
+const { ConfigError, createConfigStore } = require('./config');
 const { createIconStore, parseSavedIcons } = require('./favicon');
 const { createEvents } = require('./events');
 const { writeSafely } = require('./files');
@@ -36,9 +36,6 @@ function cacheControlFor(filePath) {
 // ago can look a moment too young. Without some slack it would wait a whole extra tick.
 const DUE_SLACK_MS = 2000;
 
-// health.json is only a cache for showing results straight after a restart, so it needn't be saved on every check.
-const HEALTH_SAVE_MS = 10 * 60 * 1000;
-
 function createRouteStore({
   traefikUrl,
   fetchImpl,
@@ -46,12 +43,12 @@ function createRouteStore({
   checkRoutes = checkAllRoutes,
   healthOptions = {},
   healthIntervalMs = 0,
-  health = new Map(),
   now = Date.now,
 }) {
   const state = { routes: [], updatedAt: null, error: null };
-  // Keyed by route id. Each result records the URL it checked, so a route whose URL changes is checked again.
-  let healthResults = new Map(health);
+  // Keyed by route id. Each result records the URL it checked, so a route whose URL changes is checked again. They're
+  // only kept in memory: after a restart every route is checked straight away.
+  let healthResults = new Map();
 
   // Resolves to whether the routes or the error changed.
   async function refresh() {
@@ -86,7 +83,7 @@ function createRouteStore({
   // Only routes that are new, have a new URL or were last checked an interval ago are checked, so each route gets
   // at most one check per interval however often Traefik is polled. Returns whether any route was checked.
   async function refreshHealth() {
-    // Until Traefik has answered once there's nothing to check, and pruning would throw away the saved results.
+    // Until Traefik has answered once there's nothing to check.
     if (!state.updatedAt) return false;
     const checkable = state.routes.filter(isCheckable);
     const due = checkable.filter(isDue);
@@ -97,15 +94,11 @@ function createRouteStore({
         if (result) healthResults.set(route.id, { ...result, url: route.url });
       }
     }
-    // Forget routes Traefik no longer serves, so the saved results don't grow forever.
+    // Forget routes Traefik no longer serves, so the results don't grow forever.
     const kept = new Map(checkable.filter(route => healthResults.has(route.id)).map(route => [route.id, healthResults.get(route.id)]));
     const pruned = kept.size !== healthResults.size;
     healthResults = kept;
     return due.length > 0 || pruned;
-  }
-
-  function getHealth() {
-    return Object.fromEntries(healthResults);
   }
 
   function getRoutesWithHealth() {
@@ -115,7 +108,7 @@ function createRouteStore({
     });
   }
 
-  return { state, refresh, refreshHealth, getHealth, getRoutesWithHealth };
+  return { state, refresh, refreshHealth, getRoutesWithHealth };
 }
 
 function sendJson(res, status, body) {
@@ -288,28 +281,6 @@ function saveQuietly(what, task) {
   };
 }
 
-// Runs `task` when asked, but at most once every `intervalMs`. A request that comes sooner is remembered, and runs
-// with the next request after the interval or with `flush`. This keeps a file that changes on every poll, such as
-// health.json, from wearing out a Raspberry Pi's SD card.
-function atMostEvery(intervalMs, task, now = Date.now) {
-  let last = -Infinity;
-  let pending = false;
-
-  async function flush() {
-    if (!pending) return;
-    pending = false;
-    last = now();
-    await task();
-  }
-
-  async function request() {
-    pending = true;
-    if (now() - last >= intervalMs) await flush();
-  }
-
-  return { request, flush };
-}
-
 // A missing, mistyped or tiny interval would otherwise poll back to back, so it falls back to the default or is
 // raised to the minimum.
 function readSeconds(env, name, { fallback, min }) {
@@ -365,10 +336,9 @@ if (require.main === module) {
     address: process.env.HEALTHCHECK_ADDRESS || undefined,
   };
 
-  // Icons found on the sites and the latest health checks are saved beside the config file, so a restart shows them
-  // straight away. Both are only caches, so a file that can't be read is warned about and started afresh.
+  // Icons found on the sites are saved beside the config file, so a restart shows them straight away. They're only a
+  // cache, so a file that can't be read is warned about and started afresh.
   const iconsFile = path.join(path.dirname(configFile), 'icons.json');
-  const healthFile = path.join(path.dirname(configFile), 'health.json');
   const loadCache = (file, parse) => fs.readFile(file, 'utf8').then(parse).catch(err => {
     if (err.code === 'EISDIR') {
       console.warn(`${file} is a directory, not a file, so it won't be saved. Docker creates a directory when the file you mount doesn't exist on the host: create the file (an empty one is fine), remove the directory Docker made and recreate the container`);
@@ -377,20 +347,15 @@ if (require.main === module) {
     }
     return null;
   });
-  const parseHealth = text => storedHealth(text.trim() ? JSON.parse(text) : {});
 
   const config = createConfigStore({ file: configFile });
   const events = createEvents();
 
-  Promise.all([config.read(), loadCache(iconsFile, parseSavedIcons), loadCache(healthFile, parseHealth)]).then(([{ doc }, savedIcons, savedHealth]) => {
-    // Older versions saved health checks in the config file, so they're used until health.json has been written.
-    const health = savedHealth ?? storedHealth(doc.health);
-    const store = createRouteStore({ traefikUrl, fetchImpl: fetch, entryPointPorts, healthOptions, healthIntervalMs: healthSeconds * 1000, health });
+  loadCache(iconsFile, parseSavedIcons).then(savedIcons => {
+    const store = createRouteStore({ traefikUrl, fetchImpl: fetch, entryPointPorts, healthOptions, healthIntervalMs: healthSeconds * 1000 });
     // Icons are looked up even for routes with one set in the config file, so the page can fall back to the
     // site's own icon if that one doesn't load.
     const icons = createIconStore({ options: healthOptions, saved: savedIcons ?? new Map(), onChange: events.notify });
-    // Saved at most every HEALTH_SAVE_MS, and when the server stops.
-    const saveHealth = atMostEvery(HEALTH_SAVE_MS, saveQuietly(`Saving health checks to ${healthFile}`, () => writeSafely(healthFile, `${JSON.stringify(store.getHealth(), null, 2)}\n`)));
     const saveIcons = saveQuietly(`Saving icons to ${iconsFile}`, () => writeSafely(iconsFile, icons.serialize()));
     const refreshIcons = () => icons.refresh(store.getRoutesWithHealth()).then(changed => changed && saveIcons(), err => {
       console.error(`Looking up route icons failed: ${err.message}`);
@@ -407,7 +372,6 @@ if (require.main === module) {
         const routesChanged = await store.refresh();
         const healthChanged = await store.refreshHealth();
         if (routesChanged || healthChanged) events.notify();
-        if (healthChanged) await saveHealth.request();
         if (store.state.updatedAt) refreshIcons();
       } catch (err) {
         // Logged rather than thrown: an unhandled rejection would stop the server, and the next tick may well work.
@@ -420,9 +384,8 @@ if (require.main === module) {
     const server = createServer({ store, config, title, icons, events, frameAncestors });
     server.listen(port, () => console.log(`Homepage on :${port}, reading routes from ${traefikUrl} every ${pollSeconds}s, checking each route every ${healthSeconds}s, groups from ${configFile}`));
     for (const signal of ['SIGINT', 'SIGTERM']) {
-      process.on(signal, async () => {
+      process.on(signal, () => {
         events.close();
-        await saveHealth.flush();
         server.close(() => process.exit(0));
       });
     }
@@ -431,4 +394,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { createServer, createRouteStore, atMostEvery, readSeconds, readPort, readFrameAncestors };
+module.exports = { createServer, createRouteStore, readSeconds, readPort, readFrameAncestors };
