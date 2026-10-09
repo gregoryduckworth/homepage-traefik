@@ -1,5 +1,6 @@
 import { putJson } from './api.js';
 import { watchChanges } from './changes.js';
+import { createDragAndDrop } from './drag.js';
 import { $, el, closeOnBackdrop, iconButton, INFO_ICON, RENAME_ICON, DELETE_ICON, UP_ICON, DOWN_ICON } from './dom.js';
 import { addressOf, byName, detailRows, displayName, groupKey, isHidden, matches, statusOf } from './routes.js';
 import './theme-toggle.js';
@@ -33,9 +34,6 @@ const els = {
   hiddenToggle: $('hidden-toggle'),
 };
 
-const DRAG_TYPE = 'application/x-homepage-route';
-const GROUP_DRAG_TYPE = 'application/x-homepage-group';
-
 closeOnBackdrop(els.details);
 closeOnBackdrop(els.groupDialog);
 closeOnBackdrop(els.routeDialog);
@@ -47,10 +45,7 @@ let saving = 0;
 let groupEdits = 0;
 // The groups the server last reported, which the page falls back to when a save fails.
 let confirmedGroups = [];
-// The id of the route or the name of the group being dragged. Re-rendering mid-drag would detach the dragged
-// element, so renders wait for the drop.
-let dragId = null;
-let dragGroup = null;
+// Re-rendering mid-drag would detach the dragged element, so renders wait for the drop.
 let renderPending = false;
 // Hidden routes are left off the page, the strip and the summary until someone chooses to show them.
 let showHidden = false;
@@ -133,8 +128,8 @@ function renderTile(route) {
   const item = el('li');
   item.dataset.route = route.id;
   item.draggable = true;
-  item.addEventListener('dragstart', event => startDrag(event, item));
-  item.addEventListener('dragend', endDrag);
+  item.addEventListener('dragstart', event => drag.startDrag(event, item));
+  item.addEventListener('dragend', drag.endDrag);
   item.append(tile);
   return item;
 }
@@ -230,8 +225,8 @@ function renderSection(title, routes, group, hiddenCount = 0) {
   if (group) {
     section.dataset.group = group.name;
     head.draggable = true;
-    head.addEventListener('dragstart', event => startGroupDrag(event, section));
-    head.addEventListener('dragend', endDrag);
+    head.addEventListener('dragstart', event => drag.startGroupDrag(event, section));
+    head.addEventListener('dragend', drag.endDrag);
     if (data.groups.length > 1) {
       const index = data.groups.indexOf(group);
       const up = iconButton(UP_ICON, `Move ${group.name} up`, () => shiftGroup(group.name, -1));
@@ -273,7 +268,7 @@ function renderNotice() {
 }
 
 function render() {
-  if (dragId || dragGroup) {
+  if (drag.isDragging()) {
     renderPending = true;
     return;
   }
@@ -513,116 +508,15 @@ $('route-cancel').addEventListener('click', () => els.routeDialog.close());
 $('group-cancel').addEventListener('click', () => els.groupDialog.close());
 els.detailsGroup.addEventListener('change', () => moveRoute(detailsId, els.detailsGroup.value || null));
 
-// Drag and drop: a tile dropped on a custom group joins it (before the tile it lands on), and one dropped on
-// an entry point group or the ungroup zone leaves its group. A custom group dragged by its heading and dropped
-// on another custom group goes above or below it, depending on which half of it the pointer is over.
-let dropHint = { section: null, tile: null, place: null };
-
-function showDropHint(section, tile, place = null) {
-  if (dropHint.section === section && dropHint.tile === tile && dropHint.place === place) return;
-  dropHint.section?.removeAttribute('data-drop');
-  dropHint.section?.removeAttribute('data-drop-place');
-  dropHint.tile?.removeAttribute('data-drop-before');
-  if (place) section?.setAttribute('data-drop-place', place);
-  else section?.setAttribute('data-drop', '');
-  tile?.setAttribute('data-drop-before', '');
-  dropHint = { section, tile, place };
-}
-
-function startDrag(event, item) {
-  dragId = item.dataset.route;
-  event.dataTransfer.effectAllowed = 'move';
-  event.dataTransfer.setData(DRAG_TYPE, dragId);
-  // Style the source after the browser has captured it as the drag image.
-  requestAnimationFrame(() => {
-    item.dataset.dragging = '';
-    els.ungroupZone.hidden = !groupOf(dragId);
-  });
-}
-
-function startGroupDrag(event, section) {
-  dragGroup = section.dataset.group;
-  event.dataTransfer.effectAllowed = 'move';
-  event.dataTransfer.setData(GROUP_DRAG_TYPE, dragGroup);
-  requestAnimationFrame(() => {
-    section.dataset.dragging = '';
-  });
-}
-
-function endDrag() {
-  if (!dragId && !dragGroup) return;
-  dragId = null;
-  dragGroup = null;
-  showDropHint(null, null);
-  els.ungroupZone.hidden = true;
-  els.routes.querySelector('[data-dragging]')?.removeAttribute('data-dragging');
-  if (renderPending) render();
-}
-
-function dropTarget(event) {
-  if (!dragId) return null;
-  if (els.ungroupZone.contains(event.target)) return { section: els.ungroupZone, group: null, tile: null };
-  const section = event.target.closest('.group');
-  if (!section) return null;
-  const group = section.dataset.group ?? null;
-  const tile = group != null ? event.target.closest('[data-route]') : null;
-  return { section, group, tile };
-}
-
-// Where a dragged group would land: `before` is the group it would go in front of, or null for last. Dropping it
-// next to where it already is changes nothing, so that gets no insertion bar.
-function groupDropTarget(event) {
-  if (!dragGroup) return null;
-  const section = event.target.closest('.group[data-group]');
-  const index = data.groups.findIndex(g => g.name === section?.dataset.group);
-  if (index < 0) return null;
-  const box = section.getBoundingClientRect();
-  const place = event.clientY > box.top + box.height / 2 ? 'after' : 'before';
-  const before = data.groups[place === 'after' ? index + 1 : index]?.name ?? null;
-  const next = data.groups[data.groups.findIndex(g => g.name === dragGroup) + 1]?.name ?? null;
-  const unchanged = before === dragGroup || before === next;
-  return { section: unchanged ? null : section, place, before };
-}
-
-els.routes.addEventListener('dragover', event => {
-  if (!dragGroup) return;
-  const target = groupDropTarget(event);
-  showDropHint(target?.section, null, target?.section && target.place);
-  if (!target) return;
-  event.preventDefault();
-  event.dataTransfer.dropEffect = 'move';
+const drag = createDragAndDrop({
+  routes: els.routes,
+  ungroupZone: els.ungroupZone,
+  groups: () => data.groups,
+  groupOf,
+  moveRoute,
+  moveGroup,
+  onEnd: () => { if (renderPending) render(); },
 });
-els.routes.addEventListener('drop', event => {
-  const target = groupDropTarget(event);
-  if (!target) return;
-  event.preventDefault();
-  const name = dragGroup;
-  endDrag();
-  moveGroup(name, target.before);
-});
-
-for (const zone of [els.routes, els.ungroupZone]) {
-  zone.addEventListener('dragover', event => {
-    if (dragGroup) return;
-    const target = dropTarget(event);
-    // No insertion bar on the tile being dragged: dropping it there leaves it where it is.
-    showDropHint(target?.section, target?.tile?.dataset.route === dragId ? null : target?.tile);
-    if (!target) return;
-    event.preventDefault();
-    event.dataTransfer.dropEffect = 'move';
-  });
-  zone.addEventListener('dragleave', event => {
-    if (!zone.contains(event.relatedTarget)) showDropHint(null, null);
-  });
-  zone.addEventListener('drop', event => {
-    const target = dropTarget(event);
-    if (!target) return;
-    event.preventDefault();
-    const id = dragId;
-    endDrag();
-    moveRoute(id, target.group, target.tile?.dataset.route);
-  });
-}
 
 // Loads can overlap, say a poll and the reload after saving a route, so only the newest response is used.
 let loadsStarted = 0;
