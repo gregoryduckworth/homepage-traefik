@@ -4,6 +4,7 @@ const dns = require('node:dns');
 const net = require('node:net');
 const { mapLimit } = require('./pool');
 
+// How long a health check or icon request may take, unless HEALTHCHECK_TIMEOUT_SECONDS says otherwise.
 const DEFAULT_TIMEOUT_MS = 10000;
 const DEFAULT_CONCURRENCY = 8;
 
@@ -170,4 +171,4 @@ async function checkAllRoutes(routes, { concurrency = DEFAULT_CONCURRENCY, ...op
   return new Map(probed.map((route, index) => [route.id, results[index]]));
 }
 
-module.exports = { checkHealth, checkAllRoutes, describeFailure, isCheckable, isTraefikNotFound, lookupFor };
+module.exports = { DEFAULT_TIMEOUT_MS, checkHealth, checkAllRoutes, describeFailure, isCheckable, isTraefikNotFound, lookupFor };

@@ -113,6 +113,7 @@ describe('server', () => {
   it('only accepts JSON request bodies', async () => {
     const res = await putGroups('groups=1', 'application/x-www-form-urlencoded');
     assert.equal(res.status, 415);
+    assert.equal((await res.json()).error, 'Send the request body as application/json');
   });
 
   it('rejects request bodies over 64 KB', async () => {
@@ -185,6 +186,7 @@ describe('server', () => {
   it('only checks a route when asked with application/json, which other sites cannot send', async () => {
     const res = await postCheck('app@docker', 'text/plain');
     assert.equal(res.status, 415);
+    assert.equal((await res.json()).error, 'Send the request body as application/json');
   });
 
   it('only allows POST on the check endpoint', async () => {

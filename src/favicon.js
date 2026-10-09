@@ -1,10 +1,9 @@
 const http = require('node:http');
 const https = require('node:https');
 const crypto = require('node:crypto');
-const { isCheckable, lookupFor } = require('./healthcheck');
+const { DEFAULT_TIMEOUT_MS, isCheckable, lookupFor } = require('./healthcheck');
 const { mapLimit } = require('./pool');
 
-const DEFAULT_TIMEOUT_MS = 10000;
 const DEFAULT_CONCURRENCY = 4;
 const MAX_PAGE_BYTES = 512 * 1024;
 const MAX_ICON_BYTES = 256 * 1024;

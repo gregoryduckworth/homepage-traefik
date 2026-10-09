@@ -30,4 +30,10 @@ async function writeSafely(file, text) {
   }
 }
 
-module.exports = { writeSafely };
+// Docker creates a directory in place of a bind-mounted file that doesn't exist on the host, which both saved files
+// can run into. `effect`, when given, says what that means for this file, such as ", so it won't be saved".
+function directoryInsteadOfFile(file, effect = '') {
+  return `${file} is a directory, not a file${effect}. Docker creates a directory when the file you mount doesn't exist on the host, or is in a folder Docker can't see: create the file (an empty one is fine), remove the directory Docker made and recreate the container`;
+}
+
+module.exports = { writeSafely, directoryInsteadOfFile };
