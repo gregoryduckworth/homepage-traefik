@@ -36,4 +36,37 @@ function directoryInsteadOfFile(file, effect = '') {
   return `${file} is a directory, not a file${effect}. Docker creates a directory when the file you mount doesn't exist on the host, or is in a folder Docker can't see: create the file (an empty one is fine), remove the directory Docker made and recreate the container`;
 }
 
-module.exports = { writeSafely, directoryInsteadOfFile };
+// Runs `task` one call at a time. A failure is logged once rather than on every call while it keeps failing, say
+// while the file stays unwritable.
+function saveQuietly(what, task) {
+  let queue = Promise.resolve();
+  let lastError = null;
+  return () => {
+    queue = queue.then(async () => {
+      try {
+        await task();
+        lastError = null;
+      } catch (err) {
+        if (err.message !== lastError) console.error(`${what} failed: ${err.message}`);
+        lastError = err.message;
+      }
+    });
+    return queue;
+  };
+}
+
+// Reads a file the server only keeps as a cache, such as the icons it found, with `parse`. A file that can't be read
+// or parsed is warned about and resolves to null, so the server starts afresh rather than failing; a missing one
+// resolves to null quietly.
+function readCache(file, parse) {
+  return fs.readFile(file, 'utf8').then(parse).catch(err => {
+    if (err.code === 'EISDIR') {
+      console.warn(directoryInsteadOfFile(file, ", so it won't be saved"));
+    } else if (err.code !== 'ENOENT') {
+      console.warn(`Ignoring ${file}: ${err.message}`);
+    }
+    return null;
+  });
+}
+
+module.exports = { writeSafely, directoryInsteadOfFile, saveQuietly, readCache };

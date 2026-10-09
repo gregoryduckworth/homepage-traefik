@@ -1,12 +1,13 @@
 const http = require('node:http');
 const fs = require('node:fs/promises');
 const path = require('node:path');
-const { fetchRouters, normalizeRouters, parseEntryPointPorts } = require('./traefik');
-const { checkAllRoutes, isCheckable } = require('./healthcheck');
 const { ConfigError, createConfigStore } = require('./config');
 const { createIconStore, parseSavedIcons } = require('./favicon');
 const { createEvents } = require('./events');
-const { writeSafely, directoryInsteadOfFile } = require('./files');
+const { writeSafely, saveQuietly, readCache } = require('./files');
+const { readSettings } = require('./env');
+const { createRouteStore } = require('./routeStore');
+const { createPoller } = require('./poller');
 
 const PUBLIC_DIR = path.resolve(__dirname, '..', 'public');
 
@@ -30,103 +31,6 @@ const PAGE_CSP = "default-src 'self'; img-src 'self' http: https:; object-src 'n
 // as 304s when they haven't changed. The fonts never change, so browsers keep them for a week without asking.
 function cacheControlFor(filePath) {
   return path.extname(filePath) === '.woff2' ? 'public, max-age=604800' : 'no-cache';
-}
-
-// Ticks start a little later each time, by however long the Traefik request took, so a route checked one interval
-// ago can look a moment too young. Without some slack it would wait a whole extra tick.
-const DUE_SLACK_MS = 2000;
-
-function createRouteStore({
-  traefikUrl,
-  fetchImpl,
-  entryPointPorts = new Map(),
-  checkRoutes = checkAllRoutes,
-  healthOptions = {},
-  healthIntervalMs = 0,
-  now = Date.now,
-}) {
-  const state = { routes: [], updatedAt: null, error: null };
-  // Keyed by route id. Each result records the URL it checked, so a route whose URL changes is checked again. They're
-  // only kept in memory: after a restart every route is checked straight away.
-  let healthResults = new Map();
-
-  // Resolves to whether the routes or the error changed.
-  async function refresh() {
-    const before = JSON.stringify([state.routes, state.error]);
-    try {
-      const [httpRouters, tcpRouters] = await Promise.all([
-        fetchRouters(traefikUrl, { fetchImpl }),
-        fetchRouters(traefikUrl, { fetchImpl, protocol: 'tcp' }),
-      ]);
-      state.routes = normalizeRouters(httpRouters, { ports: entryPointPorts, tcpRouters });
-      state.updatedAt = new Date().toISOString();
-      state.error = null;
-    } catch (err) {
-      if (err.name === 'TimeoutError') {
-        state.error = `The Traefik API at ${traefikUrl} didn't respond in time`;
-      } else if (err.cause) {
-        state.error = `Can't reach the Traefik API at ${traefikUrl} (${err.cause.code || err.cause.message}). Check TRAEFIK_API_URL and that the API is enabled.`;
-      } else {
-        state.error = err.message;
-      }
-      console.error(`Route refresh failed: ${state.error}`);
-    }
-    return JSON.stringify([state.routes, state.error]) !== before;
-  }
-
-  // A check that started earlier, such as the poll's while someone asked for one on the page, can finish later, so
-  // it only replaces a result for the same URL if it isn't older.
-  function setResult(route, result) {
-    const last = healthResults.get(route.id);
-    if (last?.url === route.url && Date.parse(last.checkedAt) > Date.parse(result.checkedAt)) return;
-    healthResults.set(route.id, { ...result, url: route.url });
-  }
-
-  function isDue(route) {
-    const last = healthResults.get(route.id);
-    if (!last || last.url !== route.url) return true;
-    return now() - Date.parse(last.checkedAt) >= healthIntervalMs - DUE_SLACK_MS;
-  }
-
-  // Only routes that are new, have a new URL or were last checked an interval ago are checked, so each route gets
-  // at most one check per interval however often Traefik is polled. Returns whether any route was checked.
-  async function refreshHealth() {
-    // Until Traefik has answered once there's nothing to check.
-    if (!state.updatedAt) return false;
-    const checkable = state.routes.filter(isCheckable);
-    const due = checkable.filter(isDue);
-    if (due.length) {
-      const fresh = await checkRoutes(due, healthOptions);
-      for (const route of due) {
-        const result = fresh.get(route.id);
-        if (result) setResult(route, result);
-      }
-    }
-    // Forget routes Traefik no longer serves, so the results don't grow forever.
-    const kept = new Map(checkable.filter(route => healthResults.has(route.id)).map(route => [route.id, healthResults.get(route.id)]));
-    const pruned = kept.size !== healthResults.size;
-    healthResults = kept;
-    return due.length > 0 || pruned;
-  }
-
-  // Checks one route now, whether or not it's due, as when someone asks for it on the page. Resolves to the route
-  // with its new health, or null when there's no such route or it has nothing to check.
-  async function checkRoute(id) {
-    const route = state.routes.find(r => r.id === id);
-    if (!route || !isCheckable(route)) return null;
-    const result = (await checkRoutes([route], healthOptions)).get(id);
-    if (result) setResult(route, result);
-    return { ...route, health: healthResults.get(id) || null };
-  }
-
-  function getRoutesWithHealth() {
-    return state.routes.map(route => {
-      const health = healthResults.get(route.id);
-      return { ...route, health: health || null };
-    });
-  }
-
-  return { state, refresh, refreshHealth, checkRoute, getRoutesWithHealth };
 }
 
 function sendJson(res, status, body) {
@@ -326,144 +230,31 @@ function shutDown({ server, events = null, graceMs = 1000 }) {
   return closed.finally(() => clearTimeout(timer));
 }
 
-// Runs `task` one call at a time. A failure is logged once rather than on every call while it keeps failing, say
-// while the file stays unwritable.
-function saveQuietly(what, task) {
-  let queue = Promise.resolve();
-  let lastError = null;
-  return () => {
-    queue = queue.then(async () => {
-      try {
-        await task();
-        lastError = null;
-      } catch (err) {
-        if (err.message !== lastError) console.error(`${what} failed: ${err.message}`);
-        lastError = err.message;
-      }
-    });
-    return queue;
-  };
-}
-
-// A missing, mistyped or tiny interval would otherwise poll back to back, so it falls back to the default or is
-// raised to the minimum.
-function readSeconds(env, name, { fallback, min }) {
-  const raw = env[name];
-  if (raw === undefined || raw.trim() === '') return fallback;
-  const value = Number(raw);
-  if (!Number.isFinite(value)) {
-    console.warn(`${name}=${raw} isn't a number of seconds, so ${fallback} is used`);
-    return fallback;
-  }
-  if (value < min) {
-    console.warn(`${name}=${raw} is below the minimum, so ${min} is used`);
-    return min;
-  }
-  return value;
-}
-
-// A port that isn't a whole number from 1 to 65535 would otherwise crash the server as it starts.
-function readPort(env, fallback = 3000) {
-  const raw = env.PORT;
-  if (raw === undefined || raw.trim() === '') return fallback;
-  const value = Number(raw);
-  if (Number.isInteger(value) && value >= 1 && value <= 65535) return value;
-  console.warn(`PORT=${raw} isn't a port number from 1 to 65535, so ${fallback} is used`);
-  return fallback;
-}
-
-// The sources in FRAME_ANCESTORS, such as "https://dash.example.com" or "*", go straight into a header, so anything
-// that would end the directive or the header is refused.
-function readFrameAncestors(env, fallback = "'self'") {
-  const raw = (env.FRAME_ANCESTORS || '').trim();
-  if (!raw) return fallback;
-  if (/[;,\r\n]/.test(raw)) {
-    console.warn(`FRAME_ANCESTORS=${raw} should be a space-separated list of sites, so only the homepage itself may frame it`);
-    return fallback;
-  }
-  return raw;
-}
-
-if (require.main === module) {
-  const port = readPort(process.env);
-  const frameAncestors = readFrameAncestors(process.env);
-  const traefikUrl = process.env.TRAEFIK_API_URL || 'http://traefik:8080';
-  const pollSeconds = readSeconds(process.env, 'POLL_INTERVAL_SECONDS', { fallback: 30, min: 5 });
-  const healthSeconds = readSeconds(process.env, 'HEALTHCHECK_INTERVAL_SECONDS', { fallback: 60, min: 10 });
-  const title = process.env.HOMEPAGE_TITLE || 'Routes';
-  const version = process.env.HOMEPAGE_VERSION || null;
-  const { ports: entryPointPorts, invalid: invalidPorts } = parseEntryPointPorts(process.env.ENTRYPOINT_PORTS);
-  if (invalidPorts.length) console.warn(`Ignoring ${invalidPorts.join(', ')} in ENTRYPOINT_PORTS: each entry should be <entry point>:<port>, such as websecure:8443`);
-  const configFile = path.resolve(process.env.CONFIG_FILE || 'config/homepage.json');
-  const timeoutSeconds = readSeconds(process.env, 'HEALTHCHECK_TIMEOUT_SECONDS', { fallback: 10, min: 1 });
-  const healthOptions = {
-    timeoutMs: timeoutSeconds * 1000,
-    address: process.env.HEALTHCHECK_ADDRESS || undefined,
-  };
-
-  // Icons found on the sites are saved beside the config file, so a restart shows them straight away. They're only a
-  // cache, so a file that can't be read is warned about and started afresh.
+// Starts the homepage as `env` sets it up: serves the page, and polls Traefik until it's stopped.
+async function main(env) {
+  const { port, frameAncestors, traefikUrl, pollSeconds, healthSeconds, title, version, entryPointPorts, configFile, healthOptions } = readSettings(env);
+  // Icons found on the sites are saved beside the config file, so a restart shows them straight away.
   const iconsFile = path.join(path.dirname(configFile), 'icons.json');
-  const loadCache = (file, parse) => fs.readFile(file, 'utf8').then(parse).catch(err => {
-    if (err.code === 'EISDIR') {
-      console.warn(directoryInsteadOfFile(file, ", so it won't be saved"));
-    } else if (err.code !== 'ENOENT') {
-      console.warn(`Ignoring ${file}: ${err.message}`);
-    }
-    return null;
-  });
-
   const config = createConfigStore({ file: configFile });
   const events = createEvents();
+  const savedIcons = await readCache(iconsFile, parseSavedIcons);
 
-  loadCache(iconsFile, parseSavedIcons).then(savedIcons => {
-    const store = createRouteStore({ traefikUrl, fetchImpl: fetch, entryPointPorts, healthOptions, healthIntervalMs: healthSeconds * 1000 });
-    // Icons are looked up even for routes with one set in the config file, so the page can fall back to the
-    // site's own icon if that one doesn't load.
-    const icons = createIconStore({ options: healthOptions, saved: savedIcons ?? new Map(), onChange: events.notify });
-    const saveIcons = saveQuietly(`Saving icons to ${iconsFile}`, () => writeSafely(iconsFile, icons.serialize()));
-    const refreshIcons = () => icons.refresh(store.getRoutesWithHealth()).then(changed => changed && saveIcons(), err => {
-      console.error(`Looking up route icons failed: ${err.message}`);
-    });
+  const store = createRouteStore({ traefikUrl, fetchImpl: fetch, entryPointPorts, healthOptions, healthIntervalMs: healthSeconds * 1000 });
+  // Icons are looked up even for routes with one set in the config file, so the page can fall back to the
+  // site's own icon if that one doesn't load.
+  const icons = createIconStore({ options: healthOptions, saved: savedIcons ?? new Map(), onChange: events.notify });
+  const saveIcons = saveQuietly(`Saving icons to ${iconsFile}`, () => writeSafely(iconsFile, icons.serialize()));
+  const { poll, check } = createPoller({ store, icons, events, saveIcons });
 
-    // Skip a tick if the previous cycle is still running, so a slow probe can't overwrite newer results. Icons are
-    // looked up in the background, so a slow site can't hold up the next poll. Until Traefik has answered once
-    // there are no routes, and refreshing the icons would forget the saved ones.
-    let polling = false;
-    const poll = async () => {
-      if (polling) return;
-      polling = true;
-      try {
-        const routesChanged = await store.refresh();
-        const healthChanged = await store.refreshHealth();
-        if (routesChanged || healthChanged) events.notify();
-        if (store.state.updatedAt) refreshIcons();
-      } catch (err) {
-        // Logged rather than thrown: an unhandled rejection would stop the server, and the next tick may well work.
-        console.error(`Polling failed: ${err.message}`);
-      } finally {
-        polling = false;
-      }
-    };
-
-    // A check asked for on the page runs straight away, beside the poll's. The page waits for the icon too, so it
-    // knows when everything it asked for is done.
-    const check = async id => {
-      const route = await store.checkRoute(id);
-      if (!route) return null;
-      events.notify();
-      if (await icons.recheck(route).catch(err => console.error(`Looking up the icon for ${id} failed: ${err.message}`))) saveIcons();
-      return route;
-    };
-
-    const server = createServer({ store, config, title, version, icons, events, check, frameAncestors });
-    server.listen(port, () => console.log(`Homepage on :${port}, reading routes from ${traefikUrl} every ${pollSeconds}s, checking each route every ${healthSeconds}s, groups from ${configFile}`));
-    for (const signal of ['SIGINT', 'SIGTERM']) {
-      process.on(signal, () => shutDown({ server, events }).then(() => process.exit(0)));
-    }
-    poll();
-    setInterval(poll, pollSeconds * 1000).unref();
-  });
+  const server = createServer({ store, config, title, version, icons, events, check, frameAncestors });
+  server.listen(port, () => console.log(`Homepage on :${port}, reading routes from ${traefikUrl} every ${pollSeconds}s, checking each route every ${healthSeconds}s, groups from ${configFile}`));
+  for (const signal of ['SIGINT', 'SIGTERM']) {
+    process.on(signal, () => shutDown({ server, events }).then(() => process.exit(0)));
+  }
+  poll();
+  setInterval(poll, pollSeconds * 1000).unref();
 }
 
-module.exports = { createServer, createRouteStore, shutDown, readSeconds, readPort, readFrameAncestors };
+if (require.main === module) main(process.env);
+
+module.exports = { createServer, shutDown };

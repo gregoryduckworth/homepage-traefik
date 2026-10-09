@@ -1,11 +1,12 @@
-const { describe, it, before, after, beforeEach } = require('node:test');
+const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const net = require('node:net');
 const { once } = require('node:events');
 const os = require('node:os');
 const path = require('node:path');
-const { createServer, createRouteStore, shutDown, readSeconds, readPort, readFrameAncestors } = require('../src/server');
+const { createServer, shutDown } = require('../src/server');
+const { createRouteStore } = require('../src/routeStore');
 const { createConfigStore } = require('../src/config');
 const { createEvents } = require('../src/events');
 
@@ -335,184 +336,6 @@ describe('server checks', () => {
   });
 });
 
-describe('createRouteStore entry point ports', () => {
-  it('puts the configured port in route URLs', async () => {
-    const fetchImpl = async url => routersResponse(url, [{ name: 'app@docker', rule: 'Host(`app.test`)', entryPoints: ['websecure'], tls: {} }]);
-    const store = createRouteStore({ traefikUrl: 'http://traefik:8080', fetchImpl, entryPointPorts: new Map([['websecure', 8443]]) });
-    await store.refresh();
-    assert.equal(store.state.routes[0].url, 'https://app.test:8443');
-  });
-});
-
-describe('createRouteStore TCP routers', () => {
-  it('lists TCP routers beside HTTP ones and never checks them', async () => {
-    const fetchImpl = async url => routersResponse(url, [{ name: 'app@docker', rule: 'Host(`app.test`)' }], [{ name: 'db@docker', rule: 'HostSNI(`db.test`)' }]);
-    const checked = [];
-    const checkRoutes = async routes => {
-      checked.push(...routes.map(route => route.id));
-      return new Map();
-    };
-    const store = createRouteStore({ traefikUrl: 'http://traefik:8080', fetchImpl, checkRoutes });
-    await store.refresh();
-    await store.refreshHealth();
-    assert.deepEqual(store.state.routes.map(route => route.id), ['app@docker', 'tcp:db@docker']);
-    assert.deepEqual(checked, ['app@docker']);
-  });
-});
-
-describe('createRouteStore health checks', () => {
-  const HOUR = 60 * 60 * 1000;
-  let clock;
-  let checked;
-  let routers;
-
-  function makeStore(options = {}) {
-    const fetchImpl = async url => routersResponse(url, routers);
-    const checkRoutes = async routes => {
-      checked.push(routes.map(route => route.id));
-      return new Map(routes.map(route => [route.id, { reachable: true, statusCode: 200, checkedAt: new Date(clock).toISOString() }]));
-    };
-    return createRouteStore({ traefikUrl: 'http://traefik:8080', fetchImpl, checkRoutes, healthIntervalMs: HOUR, now: () => clock, ...options });
-  }
-
-  beforeEach(() => {
-    clock = Date.parse('2026-01-01T00:00:00Z');
-    checked = [];
-    routers = [
-      { name: 'a@docker', rule: 'Host(`a.test`)', status: 'enabled' },
-      { name: 'b@docker', rule: 'Host(`b.test`)', status: 'enabled' },
-    ];
-  });
-
-  it('checks each route at most once per interval however often Traefik is polled', async () => {
-    const store = makeStore();
-    for (const minutes of [0, 1, 30, 59]) {
-      clock = Date.parse('2026-01-01T00:00:00Z') + minutes * 60 * 1000;
-      await store.refresh();
-      await store.refreshHealth();
-    }
-    assert.deepEqual(checked, [['a@docker', 'b@docker']]);
-  });
-
-  it('checks routes again once the interval has passed', async () => {
-    const store = makeStore();
-    await store.refresh();
-    await store.refreshHealth();
-    clock += HOUR;
-    assert.equal(await store.refreshHealth(), true);
-    assert.deepEqual(checked, [['a@docker', 'b@docker'], ['a@docker', 'b@docker']]);
-  });
-
-  it('checks a new route straight away without checking the others again', async () => {
-    const store = makeStore();
-    await store.refresh();
-    await store.refreshHealth();
-    routers.push({ name: 'c@docker', rule: 'Host(`c.test`)', status: 'enabled' });
-    await store.refresh();
-    await store.refreshHealth();
-    assert.deepEqual(checked, [['a@docker', 'b@docker'], ['c@docker']]);
-  });
-
-  it('checks a route again when its URL changes', async () => {
-    const store = makeStore();
-    await store.refresh();
-    await store.refreshHealth();
-    routers[0].rule = 'Host(`a.test`) && PathPrefix(`/app`)';
-    await store.refresh();
-    await store.refreshHealth();
-    assert.deepEqual(checked, [['a@docker', 'b@docker'], ['a@docker']]);
-  });
-
-  it('has no results until the first check', async () => {
-    const store = makeStore();
-    await store.refresh();
-    assert.equal(store.getRoutesWithHealth()[0].health, null);
-    await store.refreshHealth();
-    assert.equal(store.getRoutesWithHealth()[0].health.statusCode, 200);
-  });
-
-  it('forgets routes Traefik no longer serves, so one that comes back is checked afresh', async () => {
-    const store = makeStore();
-    await store.refresh();
-    await store.refreshHealth();
-    const b = routers.pop();
-    await store.refresh();
-    assert.equal(await store.refreshHealth(), true);
-    routers.push(b);
-    await store.refresh();
-    await store.refreshHealth();
-    assert.deepEqual(checked, [['a@docker', 'b@docker'], ['b@docker']]);
-  });
-
-  it('checks nothing while Traefik has not answered yet', async () => {
-    const store = makeStore({ fetchImpl: async () => { throw new Error('down'); } });
-    await store.refresh();
-    assert.equal(await store.refreshHealth(), false);
-    assert.deepEqual(checked, []);
-  });
-
-  it('reports whether the routes or the error changed', async () => {
-    const store = makeStore();
-    assert.equal(await store.refresh(), true);
-    assert.equal(await store.refresh(), false);
-    routers = routers.slice(1);
-    assert.equal(await store.refresh(), true);
-    const failing = makeStore({ fetchImpl: async () => { throw new Error('down'); } });
-    assert.equal(await failing.refresh(), true);
-    assert.equal(await failing.refresh(), false);
-  });
-
-  it('checks a route when asked, even though it is not due', async () => {
-    const store = makeStore();
-    await store.refresh();
-    await store.refreshHealth();
-    clock += 60 * 1000;
-    const route = await store.checkRoute('a@docker');
-    assert.deepEqual(checked, [['a@docker', 'b@docker'], ['a@docker']]);
-    assert.equal(route.health.checkedAt, new Date(clock).toISOString());
-    assert.equal(store.getRoutesWithHealth()[0].health.checkedAt, new Date(clock).toISOString());
-  });
-
-  it('has nothing to check when asked for a route it does not know or one that is disabled', async () => {
-    routers.push({ name: 'off@docker', rule: 'Host(`off.test`)', status: 'disabled' });
-    const store = makeStore();
-    await store.refresh();
-    assert.equal(await store.checkRoute('missing@docker'), null);
-    assert.equal(await store.checkRoute('off@docker'), null);
-    assert.deepEqual(checked, []);
-  });
-
-  it('keeps the newer result when an older check finishes after it', async () => {
-    let release;
-    const gate = new Promise(resolve => { release = resolve; });
-    const checkRoutes = async routes => {
-      const checkedAt = new Date(clock).toISOString();
-      if (!checked.length) {
-        checked.push('slow');
-        await gate;
-      }
-      return new Map(routes.map(route => [route.id, { reachable: true, statusCode: 200, checkedAt }]));
-    };
-    const store = makeStore({ checkRoutes });
-    await store.refresh();
-    const slow = store.refreshHealth();
-    clock += 60 * 1000;
-    await store.checkRoute('a@docker');
-    release();
-    await slow;
-    const [a, b] = store.getRoutesWithHealth();
-    assert.equal(a.health.checkedAt, new Date(clock).toISOString());
-    assert.equal(b.health.checkedAt, '2026-01-01T00:00:00.000Z');
-  });
-
-  it('reports no change when no route was due', async () => {
-    const store = makeStore();
-    await store.refresh();
-    await store.refreshHealth();
-    assert.equal(await store.refreshHealth(), false);
-  });
-});
-
 describe('version', () => {
   it('is null when the server is not running from the image', async () => {
     const config = { read: async () => ({ groups: [], routes: {}, error: null }) };
@@ -576,56 +399,9 @@ describe('shutDown', () => {
   });
 });
 
-describe('readSeconds', () => {
-  const opts = { fallback: 30, min: 5 };
-  const cases = [
-    ['uses the default when unset', {}, 30],
-    ['uses the default when empty', { POLL: ' ' }, 30],
-    ['uses the default when not a number', { POLL: 'often' }, 30],
-    ['raises zero to the minimum', { POLL: '0' }, 5],
-    ['raises a negative value to the minimum', { POLL: '-10' }, 5],
-    ['accepts a value at or above the minimum', { POLL: '120' }, 120],
-  ];
-  for (const [name, env, expected] of cases) {
-    it(name, t => {
-      t.mock.method(console, 'warn', () => {});
-      assert.equal(readSeconds(env, 'POLL', opts), expected);
-    });
-  }
-});
+describe('frame ancestors', () => {
 
-describe('readPort', () => {
-  const cases = [
-    ['uses the default when unset', {}, 3000],
-    ['uses the default when empty', { PORT: ' ' }, 3000],
-    ['uses the default when not a number', { PORT: 'http' }, 3000],
-    ['uses the default for a fraction', { PORT: '80.5' }, 3000],
-    ['uses the default when out of range', { PORT: '70000' }, 3000],
-    ['uses the default for zero', { PORT: '0' }, 3000],
-    ['accepts a port number', { PORT: '8080' }, 8080],
-  ];
-  for (const [name, env, expected] of cases) {
-    it(name, t => {
-      t.mock.method(console, 'warn', () => {});
-      assert.equal(readPort(env), expected);
-    });
-  }
-});
-
-describe('readFrameAncestors', () => {
-  const cases = [
-    ['allows only the homepage when unset', {}, "'self'"],
-    ['passes a list of sites through', { FRAME_ANCESTORS: " 'self' https://dash.test " }, "'self' https://dash.test"],
-    ['refuses a value that would end the directive', { FRAME_ANCESTORS: "*; script-src *" }, "'self'"],
-  ];
-  for (const [name, env, expected] of cases) {
-    it(name, t => {
-      t.mock.method(console, 'warn', () => {});
-      assert.equal(readFrameAncestors(env), expected);
-    });
-  }
-
-  it('is used by the server', async () => {
+  it('go into the page\'s Content-Security-Policy', async () => {
     const server = createServer({ store: createRouteStore({ traefikUrl: 'http://traefik:8080', fetchImpl: async () => jsonResponse([]) }), config: {}, title: 't', frameAncestors: '*' });
     await new Promise(resolve => server.listen(0, resolve));
     try {
