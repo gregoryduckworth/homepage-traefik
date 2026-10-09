@@ -34,3 +34,8 @@ export function iconButton(icon, label, onClick) {
   button.addEventListener('click', onClick);
   return button;
 }
+
+// "1 route" or "2 routes". `many` is for words that don't just take an s, such as plural(n, 'needs', 'need').
+export function plural(count, one, many = `${one}s`) {
+  return `${count} ${count === 1 ? one : many}`;
+}
