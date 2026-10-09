@@ -17,7 +17,8 @@ module.exports = [
     languageOptions: { sourceType: 'commonjs', globals: globals.node },
   },
   {
+    // The page's scripts run in the browser as ES modules.
     files: ['public/**/*.js'],
-    languageOptions: { sourceType: 'script', globals: globals.browser },
+    languageOptions: { sourceType: 'module', globals: globals.browser },
   },
 ];
