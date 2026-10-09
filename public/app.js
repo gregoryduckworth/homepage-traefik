@@ -61,20 +61,24 @@ function watchedRoutes() {
   return data.routes.filter(route => !isHidden(route));
 }
 
+// Icon addresses that didn't load. Every update rebuilds the tiles, so without this each one would request a broken
+// icon again before falling back to the next. A changed icon has a new address, and a reload tries them all afresh.
+const brokenIcons = new Set();
+
 // An icon set on the page, else the one the server found on the site, else the name's first letter; an image that
 // doesn't load falls through to the next. The status dot sits on its corner.
 function renderIcon(route, dot) {
   const box = el('span', 'tile-icon');
   const letter = el('span', 'tile-letter', [...displayName(route)][0]?.toUpperCase() || '?');
   letter.setAttribute('aria-hidden', 'true');
-  const sources = [route.custom?.icon, route.icon].filter(Boolean);
+  const sources = [route.custom?.icon, route.icon].filter(src => src && !brokenIcons.has(src));
   if (sources.length) {
     const img = el('img');
     img.alt = '';
     img.draggable = false;
     img.referrerPolicy = 'no-referrer';
     img.addEventListener('error', () => {
-      sources.shift();
+      brokenIcons.add(sources.shift());
       if (sources.length) img.src = sources[0];
       else img.replaceWith(letter);
     });
