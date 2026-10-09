@@ -182,8 +182,9 @@ function pathParam(pathname, prefix) {
 
 // `events`, when given, serves /api/events and tells other open pages about changes saved here. `frameAncestors`
 // lists the sites that may show the page in a frame: anyone who can open it can change its groups, so by default
-// only the homepage itself may, which stops another site tricking someone into dragging routes about.
-function createServer({ store, config, title, icons = { get: () => null }, events = null, frameAncestors = "'self'" }) {
+// only the homepage itself may, which stops another site tricking someone into dragging routes about. `version` is the
+// image's version, shown at the foot of the page, or null when not running from the image.
+function createServer({ store, config, title, version = null, icons = { get: () => null }, events = null, frameAncestors = "'self'" }) {
   async function handle(req, res) {
     const { pathname } = new URL(req.url, 'http://localhost');
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -193,6 +194,7 @@ function createServer({ store, config, title, icons = { get: () => null }, event
       const { groups, routes: settings, error: configError } = await config.read();
       sendJson(res, 200, {
         title,
+        version,
         routes: store.getRoutesWithHealth().map(route => ({
           ...route,
           custom: settings[route.id] || null,
@@ -338,6 +340,7 @@ if (require.main === module) {
   const pollSeconds = readSeconds(process.env, 'POLL_INTERVAL_SECONDS', { fallback: 30, min: 5 });
   const healthSeconds = readSeconds(process.env, 'HEALTHCHECK_INTERVAL_SECONDS', { fallback: 60, min: 10 });
   const title = process.env.HOMEPAGE_TITLE || 'Routes';
+  const version = process.env.HOMEPAGE_VERSION || null;
   const { ports: entryPointPorts, invalid: invalidPorts } = parseEntryPointPorts(process.env.ENTRYPOINT_PORTS);
   if (invalidPorts.length) console.warn(`Ignoring ${invalidPorts.join(', ')} in ENTRYPOINT_PORTS: each entry should be <entry point>:<port>, such as websecure:8443`);
   const configFile = path.resolve(process.env.CONFIG_FILE || 'config/homepage.json');
@@ -392,7 +395,7 @@ if (require.main === module) {
       }
     };
 
-    const server = createServer({ store, config, title, icons, events, frameAncestors });
+    const server = createServer({ store, config, title, version, icons, events, frameAncestors });
     server.listen(port, () => console.log(`Homepage on :${port}, reading routes from ${traefikUrl} every ${pollSeconds}s, checking each route every ${healthSeconds}s, groups from ${configFile}`));
     for (const signal of ['SIGINT', 'SIGTERM']) {
       process.on(signal, () => shutDown({ server, events }).then(() => process.exit(0)));

@@ -38,7 +38,7 @@ describe('server', () => {
     traefikRouters = [{ name: 'app@docker', rule: 'Host(`app.test`)', status: 'enabled' }];
     await store.refresh();
     const icons = { get: id => (id === 'app@docker' ? { type: 'image/svg+xml', body: Buffer.from('<svg></svg>'), hash: 'abc123' } : null) };
-    server = createServer({ store, config, title: 'My lab', icons });
+    server = createServer({ store, config, title: 'My lab', version: '1.2.3', icons });
     await new Promise(resolve => server.listen(0, resolve));
     base = `http://127.0.0.1:${server.address().port}`;
   });
@@ -61,6 +61,7 @@ describe('server', () => {
     const body = await res.json();
     assert.equal(res.status, 200);
     assert.equal(body.title, 'My lab');
+    assert.equal(body.version, '1.2.3');
     assert.equal(body.error, null);
     assert.equal(body.routes[0].url, 'http://app.test');
   });
@@ -399,6 +400,21 @@ describe('createRouteStore health checks', () => {
     await store.refresh();
     await store.refreshHealth();
     assert.equal(await store.refreshHealth(), false);
+  });
+});
+
+describe('version', () => {
+  it('is null when the server is not running from the image', async () => {
+    const config = { read: async () => ({ groups: [], routes: {}, error: null }) };
+    const store = createRouteStore({ traefikUrl: 'http://traefik:8080', fetchImpl: async () => jsonResponse([]) });
+    const server = createServer({ store, config, title: 'Lab' });
+    await new Promise(resolve => server.listen(0, resolve));
+    try {
+      const body = await (await fetch(`http://127.0.0.1:${server.address().port}/api/routes`)).json();
+      assert.equal(body.version, null);
+    } finally {
+      server.close();
+    }
   });
 });
 

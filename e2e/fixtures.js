@@ -46,10 +46,12 @@ const ROUTERS = [
   { name: 'api@internal', rule: 'PathPrefix(`/api`)', entryPoints: ['traefik'], status: 'enabled', provider: 'internal' },
 ];
 
-// `homepage` is a running homepage server with its own config folder, reading from its own fake Traefik.
-// Health checks are pinned to this machine so they never leave it; these tests don't depend on their results.
+// `homepage` is a running homepage server with its own config folder, reading from its own fake Traefik, and
+// reporting `version` as the image's version. Health checks are pinned to this machine so they never leave it; these
+// tests don't depend on their results.
 const test = base.extend({
   routers: [ROUTERS, { option: true }],
+  version: ['1.2.3', { option: true }],
 
   traefik: async ({ routers }, use) => {
     const traefik = await startTraefik(structuredClone(routers));
@@ -57,7 +59,7 @@ const test = base.extend({
     await traefik.close();
   },
 
-  homepage: async ({ traefik }, use) => {
+  homepage: async ({ traefik, version }, use) => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'homepage-e2e-'));
     const port = await freePort();
     const configFile = path.join(dir, 'config', 'homepage.json');
@@ -70,6 +72,7 @@ const test = base.extend({
         POLL_INTERVAL_SECONDS: '5',
         HEALTHCHECK_ADDRESS: '127.0.0.1',
         HEALTHCHECK_TIMEOUT_SECONDS: '1',
+        HOMEPAGE_VERSION: version,
       },
       stdio: 'ignore',
     });

@@ -8,7 +8,7 @@ A small homepage that lists every route your Traefik is serving, with a live sta
 - **Your layout.** Rename routes, set icons, hide the ones you don't need and drag them into groups. Everyone who opens the page sees the same layout.
 - **Lightweight.** A single Node.js process with no runtime dependencies.
 
-![The homepage listing routes in two custom groups and one entrypoint group, with a status strip across the top and one route refused](docs/screenshot.png)
+![The homepage listing routes in two custom groups and one entrypoint group, with a status strip across the top, one route refused and the version at the foot](docs/screenshot.png)
 
 ## Quick start
 
@@ -50,7 +50,7 @@ Which image tag to use:
 | `1.2.3`  | Exactly that release                                                                                               |
 | `main`   | The latest commit on `main`, released or not                                                                       |
 
-The release notes say what changed. Docker doesn't fetch a newer image by itself: run `docker compose pull && docker compose up -d` to upgrade.
+The foot of the page shows which one you're running, as its tag: `1.2.3` for a release, `main` for a build of `main`. The release notes say what changed. Docker doesn't fetch a newer image by itself: run `docker compose pull && docker compose up -d` to upgrade.
 
 ## Where routes come from
 
@@ -180,7 +180,7 @@ Apart from one line at startup, the server only logs when something goes wrong, 
 
 | Endpoint                        | Description                                                                                                    |
 | ------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `GET /api/routes`               | Routes with their health, saved settings (`custom`) and found icon, plus your groups                           |
+| `GET /api/routes`               | Routes with their health, saved settings (`custom`) and found icon, plus your groups and the image's `version` |
 | `PUT /api/groups`               | Replace the groups: `{"groups": [...]}`                                                                        |
 | `PUT /api/routes/<router name>` | Set any of `{"name": "...", "icon": "...", "hidden": true}`. Empty or `false` clears; omitted fields are kept |
 | `GET /api/icons/<router name>`  | The icon found on the route's site                                                                             |
