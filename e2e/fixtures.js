@@ -1,5 +1,6 @@
 const { test: base, expect } = require('@playwright/test');
 const { spawn } = require('node:child_process');
+const { once } = require('node:events');
 const fs = require('node:fs/promises');
 const http = require('node:http');
 const net = require('node:net');
@@ -76,7 +77,11 @@ const test = base.extend({
     await expect.poll(() => fetch(`${url}healthz`).then(res => res.status, () => 0)).toBe(200);
     const readConfig = async () => JSON.parse(await fs.readFile(configFile, 'utf8'));
     await use({ url, configFile, readConfig });
-    child.kill();
+    // The server may still be writing a file as it stops, so wait for it before removing its folder.
+    if (child.exitCode === null) {
+      child.kill();
+      await once(child, 'exit');
+    }
     await fs.rm(dir, { recursive: true, force: true });
   },
 });

@@ -287,6 +287,25 @@ describe('createIconStore', () => {
     assert.equal(await store.refresh([route('b')]), false);
   });
 
+  it('has nothing to save when a re-check finds the same icon, or nothing, for a route that has one', async () => {
+    const store = makeStore();
+    await store.refresh([route('a')]);
+    clock += 24 * HOUR;
+    assert.equal(await store.refresh([route('a')]), false);
+    found = null;
+    clock += 24 * HOUR;
+    assert.equal(await store.refresh([route('a')]), false);
+    assert.equal(lookups.length, 3);
+  });
+
+  it('has something to save when a re-check finds a different icon', async () => {
+    const store = makeStore();
+    await store.refresh([route('a')]);
+    found = { ...found, hash: 'def' };
+    clock += 24 * HOUR;
+    assert.equal(await store.refresh([route('a')]), true);
+  });
+
   it('serves saved icons without looking them up until they are due', async () => {
     const saved = new Map([['a', { url: 'http://a.test', checkedAt: clock - 23 * HOUR, icon: found }]]);
     const store = makeStore({ saved });

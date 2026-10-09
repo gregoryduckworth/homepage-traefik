@@ -208,13 +208,16 @@ function createIconStore({
   const entries = new Map(saved);
   let running = null;
 
-  // Sets or removes one route's entry, and says whether that changed what `serialize` returns.
+  // Sets or removes one route's entry, and says whether its icon is now a different one, which is all that's worth
+  // saving. A re-check that finds the same icon only moves its time on, and losing that to a restart just means the
+  // icon is looked up again a little sooner, whereas saving it would rewrite every icon on the disk.
   function set(id, entry) {
     const before = entries.get(id);
     if (entry) entries.set(id, entry);
     else entries.delete(id);
-    if (before?.icon?.hash !== entry?.icon?.hash) onChange(id);
-    return Boolean(before?.icon || entry?.icon);
+    const changed = before?.icon?.hash !== entry?.icon?.hash;
+    if (changed) onChange(id);
+    return changed;
   }
 
   function isDue(route) {
@@ -224,7 +227,7 @@ function createIconStore({
   }
 
   // `routes` is every route the page lists; icons of routes that aren't in it are forgotten. Resolves to whether
-  // the icons worth saving changed.
+  // any icon was found, replaced or forgotten, so the saved icons need writing.
   async function refresh(routes) {
     if (running) return running;
     running = (async () => {

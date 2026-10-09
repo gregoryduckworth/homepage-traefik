@@ -158,10 +158,10 @@ Routes are identified by their full router name, shown as **Router** in the deta
 
 The homepage is meant to run on a Raspberry Pi without wearing out its SD card. Health checks and icon lookups are network requests, and health results are only kept in memory, so the only writes are to the two files above:
 
-| File            | When it's written                                                                                                    |
-| --------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `homepage.json` | Only when you change something on the page                                                                           |
-| `icons.json`    | When a route's icon is found or changes, and when its daily re-check finishes: at most about once a day per route    |
+| File            | When it's written                                                                                                                          |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `homepage.json` | Only when you change something on the page; saving without changing anything writes nothing                                                |
+| `icons.json`    | Only when an icon is found, changes to a different image, or its route goes away; a daily re-check that finds the same icon writes nothing |
 
 Each save writes a temporary file and renames it over the old one, so a power cut can't leave half a file.
 
