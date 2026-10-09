@@ -101,7 +101,7 @@ How a router is shown:
 
 ## Health checks
 
-Each enabled route with a link is checked once per `HEALTHCHECK_INTERVAL_SECONDS` with a `HEAD` request, retried once with `GET` if that fails with a 5xx, a timeout or a reset. Checks run when Traefik is polled, so the interval is rounded up to a whole number of polls: with the defaults (`POLL_INTERVAL_SECONDS=30`, `HEALTHCHECK_INTERVAL_SECONDS=60`) each route is checked every 60 seconds, and a 45-second interval also works out at every 60 seconds. Results are only kept in memory, so after a restart routes show as **Checking** until the first checks finish, a few seconds later. A strip across the top shows every route at a glance, and the info button on each route opens a details panel. The panel explains a failure in a sentence, for example "Connected to 172.18.0.2:443, but it didn't send a response within 10 seconds".
+Each enabled route with a link is checked once per `HEALTHCHECK_INTERVAL_SECONDS` with a `HEAD` request, retried once with `GET` if that fails with a 5xx, a timeout or a reset. Checks run when Traefik is polled, so the interval is rounded up to a whole number of polls: with the defaults (`POLL_INTERVAL_SECONDS=30`, `HEALTHCHECK_INTERVAL_SECONDS=60`) each route is checked every 60 seconds, and a 45-second interval also works out at every 60 seconds. Results are only kept in memory, so after a restart routes show as **Checking** until the first checks finish, a few seconds later. A strip across the top shows every route at a glance, and the info button on each route opens a details panel. The panel explains a failure in a sentence, for example "Connected to 172.18.0.2:443, but it didn't send a response within 10 seconds". Select **Check now** in the panel to check the route and look up its icon straight away, say after fixing it, rather than waiting for the next check.
 
 | Status                     | Meaning                                                                                                                            |
 | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
@@ -184,10 +184,11 @@ Apart from one line at startup, the server only logs when something goes wrong, 
 | `PUT /api/groups`               | Replace the groups: `{"groups": [...]}`                                                                        |
 | `PUT /api/routes/<router name>` | Set any of `{"name": "...", "icon": "...", "hidden": true}`. Empty or `false` clears; omitted fields are kept |
 | `GET /api/icons/<router name>`  | The icon found on the route's site                                                                             |
+| `POST /api/check/<router name>` | Check the route and look up its icon now. Replies with its new `health` once both are done                     |
 | `GET /api/events`               | Server-sent events, one message whenever anything on the page changes                                          |
 | `GET /healthz`                  | Liveness check                                                                                                 |
 
-`PUT` bodies are sent as `application/json`.
+`PUT` bodies, and `POST` requests, are sent as `application/json`.
 
 ## Development
 

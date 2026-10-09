@@ -567,6 +567,8 @@ a.tile-link:hover .tile-name { color: var(--accent); }
   margin: 0 1.25rem 0.75rem;
 }
 
+.details-check-error { margin: -0.25rem 1.25rem 0.75rem; }
+
 .details-group select,
 .group-dialog input {
   flex: 1;
@@ -611,6 +613,7 @@ a.tile-link:hover .tile-name { color: var(--accent); }
 
 .button-primary { color: #fff; background: var(--accent); border: 0; }
 .button-quiet { color: var(--ink); background: none; border: 1px solid var(--hairline); }
+.button-quiet[aria-disabled="true"] { color: var(--muted); cursor: progress; }
 
 .empty {
   max-width: 34rem;

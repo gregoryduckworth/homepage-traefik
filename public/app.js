@@ -1,4 +1,4 @@
-import { putJson } from './api.js';
+import { post, putJson } from './api.js';
 import { watchChanges } from './changes.js';
 import { createDragAndDrop } from './drag.js';
 import { $, el, closeOnBackdrop, iconButton, INFO_ICON, RENAME_ICON, DELETE_ICON, UP_ICON, DOWN_ICON } from './dom.js';
@@ -32,6 +32,8 @@ const els = {
   routeError: $('route-error'),
   routeSubmit: $('route-submit'),
   detailsHide: $('details-hide'),
+  detailsCheck: $('details-check'),
+  detailsCheckError: $('details-check-error'),
   hiddenToggle: $('hidden-toggle'),
   footer: $('footer'),
   version: $('version'),
@@ -53,6 +55,9 @@ let renderPending = false;
 // Hidden routes are left off the page, the strip and the summary until someone chooses to show them.
 let showHidden = false;
 let hideError = null;
+// Routes being checked on request, and why the last such check failed, if it did, as { id, message }.
+const checking = new Set();
+let checkError = null;
 
 // The routes the strip and the summary count: every route that isn't hidden.
 function watchedRoutes() {
@@ -139,7 +144,9 @@ function renderTile(route) {
 
 function fillDetails(route) {
   const status = statusOf(route);
-  $('details-dot').parentElement.dataset.kind = status.kind;
+  const dot = $('details-dot');
+  dot.parentElement.dataset.kind = status.kind;
+  dot.toggleAttribute('data-checking', status.kind === 'checking' || checking.has(route.id));
   $('details-title').textContent = displayName(route);
 
   const errors = $('details-errors');
@@ -159,6 +166,16 @@ function fillDetails(route) {
 
   els.detailsHide.textContent = isHidden(route) ? 'Show route' : 'Hide route';
 
+  // Only routes the server checks can be checked now: disabled routes and those with no web address never are. While
+  // a check runs the button stays focusable, so a keyboard user isn't thrown out of the dialog, but does nothing.
+  const busy = checking.has(route.id);
+  els.detailsCheck.hidden = !route.url || route.status === 'disabled';
+  els.detailsCheck.textContent = busy ? 'Checking…' : 'Check now';
+  els.detailsCheck.setAttribute('aria-disabled', String(busy));
+  const error = checkError?.id === route.id ? checkError.message : null;
+  els.detailsCheckError.textContent = error;
+  els.detailsCheckError.hidden = !error;
+
   const open = $('details-open');
   open.hidden = !route.url;
   if (route.url) {
@@ -173,6 +190,7 @@ function openDetails(id) {
   const route = data.routes.find(r => r.id === id);
   if (!route) return;
   detailsId = id;
+  if (checkError?.id !== id) checkError = null;
   fillDetails(route);
   els.details.showModal();
 }
@@ -501,6 +519,24 @@ els.detailsHide.addEventListener('click', async () => {
   }
   render();
   load();
+});
+
+// Checks the route and looks up its icon straight away, rather than when they're next due. The server answers once
+// both are done, and the page then shows what they found.
+els.detailsCheck.addEventListener('click', async () => {
+  const id = detailsId;
+  if (checking.has(id)) return;
+  checking.add(id);
+  checkError = null;
+  refreshDetails();
+  try {
+    await post(`api/check/${encodeURIComponent(id)}`);
+  } catch (err) {
+    checkError = { id, message: `The route wasn’t checked. ${err.message}` };
+  } finally {
+    checking.delete(id);
+  }
+  await load();
 });
 
 els.hiddenToggle.addEventListener('click', () => {

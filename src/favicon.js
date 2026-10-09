@@ -274,6 +274,19 @@ function createIconStore({
     return now() - entry.checkedAt >= (entry.icon ? refreshMs : retryMs);
   }
 
+  // Looks up one route's icon, and says whether it's now a different one. A lookup is timed from when it started,
+  // and one that finishes after a newer one has, say the background refresh's after one asked for on the page,
+  // is dropped.
+  async function lookup(route) {
+    const checkedAt = now();
+    const icon = await find(route.url, options).catch(() => null);
+    const previous = entries.get(route.id);
+    if (previous?.url === route.url && previous.checkedAt > checkedAt) return false;
+    // A route that briefly fails keeps the icon it had, as long as its URL is the same.
+    const kept = icon || (previous?.url === route.url ? previous.icon : null);
+    return set(route.id, { url: route.url, checkedAt, icon: kept });
+  }
+
   // `routes` is every route the page lists; icons of routes that aren't in it are forgotten. Resolves to whether
   // any icon was found, replaced or forgotten, so the saved icons need writing.
   async function refresh(routes) {
@@ -285,17 +298,19 @@ function createIconStore({
 
       const due = routes.filter(route => isReachable(route) && isDue(route));
       await mapLimit(due, concurrency, async route => {
-        const previous = entries.get(route.id);
-        const icon = await find(route.url, options).catch(() => null);
-        // A route that briefly fails keeps the icon it had, as long as its URL is the same.
-        const kept = icon || (previous?.url === route.url ? previous.icon : null);
-        changed = set(route.id, { url: route.url, checkedAt: now(), icon: kept }) || changed;
+        changed = await lookup(route) || changed;
       });
       return changed;
     })().finally(() => {
       running = null;
     });
     return running;
+  }
+
+  // Looks up one route's icon now, whether or not it's due, as when someone asks for it on the page. Resolves to
+  // whether its icon is now a different one, so the saved icons need writing.
+  async function recheck(route) {
+    return isReachable(route) && lookup(route);
   }
 
   function get(id) {
@@ -311,7 +326,7 @@ function createIconStore({
     return `${JSON.stringify(Object.fromEntries(saved), null, 2)}\n`;
   }
 
-  return { refresh, get, serialize };
+  return { refresh, recheck, get, serialize };
 }
 
 module.exports = { findIcon, iconLinks, sniffImage, parseSavedIcons, createIconStore };

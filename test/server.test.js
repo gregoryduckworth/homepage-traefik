@@ -38,7 +38,7 @@ describe('server', () => {
     traefikRouters = [{ name: 'app@docker', rule: 'Host(`app.test`)', status: 'enabled' }];
     await store.refresh();
     const icons = { get: id => (id === 'app@docker' ? { type: 'image/svg+xml', body: Buffer.from('<svg></svg>'), hash: 'abc123' } : null) };
-    server = createServer({ store, config, title: 'My lab', version: '1.2.3', icons });
+    server = createServer({ store, config, title: 'My lab', version: '1.2.3', icons, check: store.checkRoute });
     await new Promise(resolve => server.listen(0, resolve));
     base = `http://127.0.0.1:${server.address().port}`;
   });
@@ -166,6 +166,33 @@ describe('server', () => {
     assert.equal(res.status, 404);
   });
 
+  function postCheck(id, contentType = 'application/json') {
+    return fetch(`${base}/api/check/${encodeURIComponent(id)}`, { method: 'POST', headers: { 'Content-Type': contentType }, body: '{}' });
+  }
+
+  it('checks a route when asked and replies with its health', async () => {
+    const res = await postCheck('app@docker');
+    assert.equal(res.status, 200);
+    assert.equal((await res.json()).health.statusCode, 200);
+  });
+
+  it('returns 404 when asked to check a route it does not know', async () => {
+    const res = await postCheck('other@docker');
+    assert.equal(res.status, 404);
+    assert.match((await res.json()).error, /no route by that name/);
+  });
+
+  it('only checks a route when asked with application/json, which other sites cannot send', async () => {
+    const res = await postCheck('app@docker', 'text/plain');
+    assert.equal(res.status, 415);
+  });
+
+  it('only allows POST on the check endpoint', async () => {
+    const res = await fetch(`${base}/api/check/app%40docker`);
+    assert.equal(res.status, 405);
+    assert.equal(res.headers.get('allow'), 'POST');
+  });
+
   it('serves the dashboard page', async () => {
     const res = await fetch(`${base}/`);
     assert.equal(res.status, 200);
@@ -265,6 +292,44 @@ describe('server events', () => {
     assert.equal(saved.status, 200);
     assert.match(await nextMessage(reader), /data: change/);
     await reader.cancel();
+  });
+});
+
+describe('server checks', () => {
+  it('runs one check of a route at a time, answering every request with it', async () => {
+    let calls = 0;
+    let release;
+    const gate = new Promise(resolve => { release = resolve; });
+    const check = async id => {
+      calls++;
+      await gate;
+      return { id, health: { reachable: true, statusCode: 200, checkedAt: `check ${calls}` } };
+    };
+    const config = { read: async () => ({ groups: [], routes: {}, error: null }) };
+    const store = createRouteStore({ traefikUrl: 'http://traefik:8080', fetchImpl: async () => jsonResponse([]) });
+    const server = createServer({ store, config, title: 'Lab', check });
+    await new Promise(resolve => server.listen(0, resolve));
+    // The server's own listener runs first and reaches the check without waiting on anything, so once this one has
+    // seen a request, that request has asked for its check.
+    let received = 0;
+    server.on('request', () => received++);
+    const post = () => fetch(`http://127.0.0.1:${server.address().port}/api/check/app%40docker`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    }).then(res => res.json());
+    try {
+      const both = Promise.all([post(), post()]);
+      while (received < 2) await new Promise(resolve => setTimeout(resolve, 5));
+      release();
+      const [first, second] = await both;
+      assert.equal(calls, 1);
+      assert.deepEqual(first, second);
+      await post();
+      assert.equal(calls, 2);
+    } finally {
+      server.close();
+    }
   });
 });
 
@@ -393,6 +458,49 @@ describe('createRouteStore health checks', () => {
     const failing = makeStore({ fetchImpl: async () => { throw new Error('down'); } });
     assert.equal(await failing.refresh(), true);
     assert.equal(await failing.refresh(), false);
+  });
+
+  it('checks a route when asked, even though it is not due', async () => {
+    const store = makeStore();
+    await store.refresh();
+    await store.refreshHealth();
+    clock += 60 * 1000;
+    const route = await store.checkRoute('a@docker');
+    assert.deepEqual(checked, [['a@docker', 'b@docker'], ['a@docker']]);
+    assert.equal(route.health.checkedAt, new Date(clock).toISOString());
+    assert.equal(store.getRoutesWithHealth()[0].health.checkedAt, new Date(clock).toISOString());
+  });
+
+  it('has nothing to check when asked for a route it does not know or one that is disabled', async () => {
+    routers.push({ name: 'off@docker', rule: 'Host(`off.test`)', status: 'disabled' });
+    const store = makeStore();
+    await store.refresh();
+    assert.equal(await store.checkRoute('missing@docker'), null);
+    assert.equal(await store.checkRoute('off@docker'), null);
+    assert.deepEqual(checked, []);
+  });
+
+  it('keeps the newer result when an older check finishes after it', async () => {
+    let release;
+    const gate = new Promise(resolve => { release = resolve; });
+    const checkRoutes = async routes => {
+      const checkedAt = new Date(clock).toISOString();
+      if (!checked.length) {
+        checked.push('slow');
+        await gate;
+      }
+      return new Map(routes.map(route => [route.id, { reachable: true, statusCode: 200, checkedAt }]));
+    };
+    const store = makeStore({ checkRoutes });
+    await store.refresh();
+    const slow = store.refreshHealth();
+    clock += 60 * 1000;
+    await store.checkRoute('a@docker');
+    release();
+    await slow;
+    const [a, b] = store.getRoutesWithHealth();
+    assert.equal(a.health.checkedAt, new Date(clock).toISOString());
+    assert.equal(b.health.checkedAt, '2026-01-01T00:00:00.000Z');
   });
 
   it('reports no change when no route was due', async () => {
