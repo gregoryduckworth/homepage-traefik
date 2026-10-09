@@ -262,6 +262,17 @@ function createServer({ store, config, title, icons = { get: () => null }, event
   });
 }
 
+// Stops taking requests, ends pages' event streams, and resolves once the server has closed. Node 24's close() also
+// waits for connections that haven't sent a request yet, such as the spare one a browser opens ahead of time, which
+// would hold up `docker stop` until Docker kills the container. So requests already under way get `graceMs` to
+// finish, and then any connection still open is closed.
+function shutDown({ server, events = null, graceMs = 1000 }) {
+  events?.close();
+  const closed = new Promise(resolve => server.close(() => resolve()));
+  const timer = setTimeout(() => server.closeAllConnections(), graceMs);
+  return closed.finally(() => clearTimeout(timer));
+}
+
 // Runs `task` one call at a time. A failure is logged once rather than on every call while it keeps failing, say
 // while the file stays unwritable.
 function saveQuietly(what, task) {
@@ -384,14 +395,11 @@ if (require.main === module) {
     const server = createServer({ store, config, title, icons, events, frameAncestors });
     server.listen(port, () => console.log(`Homepage on :${port}, reading routes from ${traefikUrl} every ${pollSeconds}s, checking each route every ${healthSeconds}s, groups from ${configFile}`));
     for (const signal of ['SIGINT', 'SIGTERM']) {
-      process.on(signal, () => {
-        events.close();
-        server.close(() => process.exit(0));
-      });
+      process.on(signal, () => shutDown({ server, events }).then(() => process.exit(0)));
     }
     poll();
     setInterval(poll, pollSeconds * 1000).unref();
   });
 }
 
-module.exports = { createServer, createRouteStore, readSeconds, readPort, readFrameAncestors };
+module.exports = { createServer, createRouteStore, shutDown, readSeconds, readPort, readFrameAncestors };
