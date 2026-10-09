@@ -177,19 +177,21 @@ The server also exposes `GET /api/routes` (the normalized route list, your group
 
 ## Development
 
-Requires Node.js 20 or newer.
+Requires Node.js 22 or newer.
 
 ```sh
 TRAEFIK_API_URL=http://localhost:8080 npm run dev
 npm test
 ```
 
-`npm test` runs the server's unit tests and needs nothing installed. The page itself is tested in a browser with [Playwright](https://playwright.dev). Each test starts its own homepage server against a fake Traefik API, so nothing else needs to be running:
+`npm test` runs the server's unit tests and needs nothing installed (`npm run test:coverage` also reports which lines they reach). The page itself is tested in a browser with [Playwright](https://playwright.dev). Each test starts its own homepage server against a fake Traefik API, so nothing else needs to be running:
 
 ```sh
 npm install
 npx playwright install chromium
 npm run test:e2e
 ```
+
+`npm run lint` checks the code with [ESLint](https://eslint.org), as CI does.
 
 The image doesn't include Playwright; it's only a development dependency.

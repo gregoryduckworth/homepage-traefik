@@ -7,7 +7,9 @@
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
     "test": "node --test",
-    "test:e2e": "playwright test"
+    "test:coverage": "node --test --experimental-test-coverage",
+    "test:e2e": "playwright test",
+    "lint": "eslint ."
   },
   "keywords": [
     "traefik",
@@ -17,9 +19,12 @@
   ],
   "license": "MIT",
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=22.0.0"
   },
   "devDependencies": {
-    "@playwright/test": "1.64.0"
+    "@eslint/js": "10.0.1",
+    "@playwright/test": "1.64.0",
+    "eslint": "10.12.0",
+    "globals": "17.13.0"
   }
 }

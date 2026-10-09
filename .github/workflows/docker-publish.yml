@@ -17,7 +17,7 @@ jobs:
     strategy:
       matrix:
         # The oldest version package.json supports, and the one the image runs.
-        node-version: [20, 22]
+        node-version: [22, 24]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -25,13 +25,24 @@ jobs:
           node-version: ${{ matrix.node-version }}
       - run: npm test
 
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+
   e2e:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
       - run: npm ci
       - run: npx playwright install --with-deps chromium
@@ -47,7 +58,7 @@ jobs:
           retention-days: 7
 
   build-and-push:
-    needs: [test, e2e]
+    needs: [test, lint, e2e]
     runs-on: ubuntu-latest
     permissions:
       contents: read

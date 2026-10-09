@@ -2,7 +2,7 @@
 # Run `mkdir config && docker compose up -d`, then open http://home.localhost and http://whoami.localhost.
 services:
   traefik:
-    image: traefik:v3.1
+    image: traefik:v3.7
     command:
       - --api.insecure=true # exposes the API on :8080 inside the Docker network
       - --providers.docker=true
