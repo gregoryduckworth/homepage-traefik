@@ -154,7 +154,9 @@ async function checkHealth(url, { timeoutMs = DEFAULT_TIMEOUT_MS, address, looku
     return { reachable: true, statusCode: attempt.statusCode, latencyMs: attempt.latencyMs, unrouted: attempt.unrouted, error: null, phase: null, detail, ...base };
   }
   const detail = describeFailure({ ...attempt, host, timeoutMs });
-  return { reachable: false, statusCode: null, latencyMs: null, error: attempt.error, phase: attempt.phase, detail, ...base };
+  // Said outright so the page needn't keep its own list of certificate error codes.
+  const certificateError = CERT_ERRORS.has(attempt.error);
+  return { reachable: false, statusCode: null, latencyMs: null, error: attempt.error, phase: attempt.phase, certificateError, detail, ...base };
 }
 
 function isCheckable(route) {

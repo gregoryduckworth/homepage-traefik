@@ -6,8 +6,8 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "test": "node --test",
-    "test:coverage": "node --test --experimental-test-coverage",
+    "test": "node --test --disable-warning=MODULE_TYPELESS_PACKAGE_JSON",
+    "test:coverage": "node --test --experimental-test-coverage --disable-warning=MODULE_TYPELESS_PACKAGE_JSON",
     "test:e2e": "playwright test",
     "lint": "eslint ."
   },

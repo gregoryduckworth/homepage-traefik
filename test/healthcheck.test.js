@@ -1,6 +1,7 @@
 const { describe, it, after } = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
+const https = require('node:https');
 const net = require('node:net');
 const { checkHealth, checkAllRoutes, describeFailure, isTraefikNotFound } = require('../src/healthcheck');
 
@@ -13,6 +14,23 @@ async function listen(server) {
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   return server.address().port;
 }
+
+// A self-signed certificate for localhost, valid until 2126, so a check meets an untrusted certificate for real.
+const SELF_SIGNED = {
+  key: `-----BEGIN EC PRIVATE KEY-----
+MHcCAQEEIMFjVEFsAnv8NrUa4yz7XReNSBeS6VnzsOjqfSdKbTBioAoGCCqGSM49
+AwEHoUQDQgAEfkP1DJTBUQ9c0bqQc1jN0hx3fTnkaze1BZBQoDnujrJR5I0bmFgr
+hHixj6KQQR8AIdOicDEk92fJFPV6xUzL4w==
+-----END EC PRIVATE KEY-----`,
+  cert: `-----BEGIN CERTIFICATE-----
+MIIBGTCBwAIJAI0n0yu/AGqXMAoGCCqGSM49BAMCMBQxEjAQBgNVBAMMCWxvY2Fs
+aG9zdDAgFw0yNjEwMDkxMDMxNDJaGA8yMTI2MDkxNTEwMzE0MlowFDESMBAGA1UE
+AwwJbG9jYWxob3N0MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEfkP1DJTBUQ9c
+0bqQc1jN0hx3fTnkaze1BZBQoDnujrJR5I0bmFgrhHixj6KQQR8AIdOicDEk92fJ
+FPV6xUzL4zAKBggqhkjOPQQDAgNIADBFAiEA7tCTtMSgbcbwnA5+czm75/px/awg
+gTZVHR8KwyWZruECIGPH9dnNOJC74cVGPI+i76XkyziFYVAPqBkOk0X3rKCF
+-----END CERTIFICATE-----`,
+};
 
 function httpServer(handler) {
   return listen(http.createServer(handler));
@@ -84,6 +102,18 @@ describe('checkHealth', () => {
     const port = await silentServer();
     const result = await checkHealth(`https://127.0.0.1:${port}`, { timeoutMs: TIMEOUT_MS });
     assert.deepEqual([result.error, result.phase], ['TIMEOUT', 'tls']);
+  });
+
+  it('says when a failure is an untrusted certificate', async () => {
+    const port = await listen(https.createServer(SELF_SIGNED, (req, res) => res.end()));
+    const result = await checkHealth(`https://localhost:${port}`, { timeoutMs: TIMEOUT_MS, address: '127.0.0.1' });
+    assert.deepEqual([result.reachable, result.error, result.certificateError], [false, 'DEPTH_ZERO_SELF_SIGNED_CERT', true]);
+  });
+
+  it('does not call other failures certificate errors', async () => {
+    const port = await closedPort();
+    const result = await checkHealth(`https://127.0.0.1:${port}`, { timeoutMs: TIMEOUT_MS });
+    assert.deepEqual([result.error, result.certificateError], ['ECONNREFUSED', false]);
   });
 
   it('recognises the 404 Traefik sends when no router matches the host', async () => {
