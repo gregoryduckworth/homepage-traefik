@@ -13,10 +13,10 @@ const UP = 0;
 const WARN = 1;
 const DOWN = 2;
 
-// The same reading of a check as the page's: no response or a 5xx is down, and Traefik's own 404 is a warning,
-// since the check may not have reached the route.
+// The same reading of a check as the page's: no response, a 5xx or a status the route's health settings don't count as
+// up is down, and Traefik's own 404 is a warning, since the check may not have reached the route.
 function outcomeOf(result) {
-  if (!result.reachable || result.statusCode >= 500) return DOWN;
+  if (!result.reachable || result.statusCode >= 500 || result.unexpected) return DOWN;
   return result.unrouted ? WARN : UP;
 }
 

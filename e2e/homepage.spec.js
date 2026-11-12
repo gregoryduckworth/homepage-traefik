@@ -162,18 +162,61 @@ test('a group dragged by its heading onto the top half of another goes above it'
 
 test('a route can be renamed, and goes back to its router name when cleared', async ({ page, homepage }) => {
   await details(page, 'grafana').click();
-  await page.getByRole('button', { name: 'Change name or icon' }).click();
-  const form = page.getByRole('dialog', { name: 'Name and icon' });
+  await page.getByRole('button', { name: 'Change settings' }).click();
+  const form = page.getByRole('dialog', { name: 'Route settings' });
   await form.getByLabel('Name').fill('Dashboards');
   await form.getByRole('button', { name: 'Save' }).click();
 
   await expect(details(page, 'Dashboards')).toBeVisible();
   expect((await homepage.readConfig()).routes).toEqual({ 'grafana@docker': { name: 'Dashboards' } });
 
-  await page.getByRole('button', { name: 'Change name or icon' }).click();
+  await page.getByRole('button', { name: 'Change settings' }).click();
   await form.getByLabel('Name').fill('');
   await form.getByRole('button', { name: 'Save' }).click();
   await expect(details(page, 'grafana')).toBeVisible();
+});
+
+test('a route\'s health check can be turned off, and given a path and the codes that count as up', async ({ page, homepage }) => {
+  await details(page, 'grafana').click();
+  const panel = page.getByRole('dialog', { name: 'grafana' });
+  await page.getByRole('button', { name: 'Change settings' }).click();
+  const form = page.getByRole('dialog', { name: 'Route settings' });
+  await form.getByLabel('Check this route').uncheck();
+  await expect(form.getByLabel('Path to check')).toBeDisabled();
+  await form.getByRole('button', { name: 'Save' }).click();
+
+  await expect(form).toBeHidden();
+  await expect(panel.getByText('Not checked: the check is turned off in the route’s settings')).toBeVisible();
+  await expect(panel.getByRole('button', { name: 'Check now' })).toBeHidden();
+  await expect(page.getByRole('link', { name: /^grafana / })).toContainText('Not checked');
+  expect((await homepage.readConfig()).routes).toEqual({ 'grafana@docker': { health: { check: false } } });
+
+  await page.getByRole('button', { name: 'Change settings' }).click();
+  await form.getByLabel('Check this route').check();
+  await form.getByLabel('Path to check').fill('/api/health');
+  await form.getByLabel('Status codes that count as up').fill('2xx');
+  await form.getByRole('button', { name: 'Save' }).click();
+  await expect(form.getByRole('alert')).toContainText('separated by commas');
+
+  await form.getByLabel('Status codes that count as up').fill('204, 200');
+  await form.getByRole('button', { name: 'Save' }).click();
+  await expect(form).toBeHidden();
+  await expect(panel.getByRole('button', { name: 'Check now' })).toBeVisible();
+  await expect(panel.locator('dd').filter({ hasText: /^200, 204$/ })).toBeVisible();
+  expect((await homepage.readConfig()).routes).toEqual({ 'grafana@docker': { health: { path: '/api/health', expect: [200, 204] } } });
+
+  await page.getByRole('button', { name: 'Change settings' }).click();
+  await expect(form.getByLabel('Path to check')).toHaveValue('/api/health');
+  await expect(form.getByLabel('Status codes that count as up')).toHaveValue('200, 204');
+});
+
+test('a 5xx is refused as a code that counts as up, with the reason', async ({ page }) => {
+  await details(page, 'grafana').click();
+  await page.getByRole('button', { name: 'Change settings' }).click();
+  const form = page.getByRole('dialog', { name: 'Route settings' });
+  await form.getByLabel('Status codes that count as up').fill('503');
+  await form.getByRole('button', { name: 'Save' }).click();
+  await expect(form.getByRole('alert')).toContainText('A 5xx always counts as down');
 });
 
 test('an icon that does not load is not requested again each time the page updates', async ({ page }) => {
@@ -184,8 +227,8 @@ test('an icon that does not load is not requested again each time the page updat
     return route.fulfill({ status: 404, headers: { 'Cache-Control': 'no-store' } });
   });
   await details(page, 'grafana').click();
-  await page.getByRole('button', { name: 'Change name or icon' }).click();
-  const form = page.getByRole('dialog', { name: 'Name and icon' });
+  await page.getByRole('button', { name: 'Change settings' }).click();
+  const form = page.getByRole('dialog', { name: 'Route settings' });
   await form.getByLabel('Icon address').fill('https://icons.test/broken.png');
   await form.getByRole('button', { name: 'Save' }).click();
   await page.keyboard.press('Escape');
@@ -361,7 +404,7 @@ test.describe('a read-only homepage', () => {
     await expect(dialog.getByRole('button', { name: 'Check now' })).toBeVisible();
     await expect(dialog.getByLabel('Group')).toBeHidden();
     await expect(dialog.getByRole('button', { name: /^Move (up|down)$/ })).toBeHidden();
-    await expect(dialog.getByRole('button', { name: 'Change name or icon' })).toBeHidden();
+    await expect(dialog.getByRole('button', { name: 'Change settings' })).toBeHidden();
     await expect(dialog.getByRole('button', { name: 'Hide route' })).toBeHidden();
   });
 

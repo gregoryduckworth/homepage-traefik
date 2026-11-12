@@ -100,6 +100,76 @@ describe('createRouteStore health checks', () => {
     assert.deepEqual(checked, [['a@docker', 'b@docker'], ['a@docker']]);
   });
 
+  describe('with health settings', () => {
+    let settings;
+    let targets;
+    const settingsStore = (options = {}) => makeStore({
+      routeSettings: async () => settings,
+      checkRoutes: async due => {
+        targets.push(...due);
+        return new Map(due.map(target => [target.id, { reachable: true, statusCode: 200, checkedAt: new Date(clock).toISOString() }]));
+      },
+      ...options,
+    });
+
+    beforeEach(() => {
+      settings = {};
+      targets = [];
+    });
+
+    it('checks the health path and expected codes the route\'s settings give', async () => {
+      settings = { 'a@docker': { name: 'A', health: { path: '/api/health', expect: [200] } } };
+      const store = settingsStore();
+      await store.refresh();
+      await store.refreshHealth();
+      assert.deepEqual(targets, [
+        { id: 'a@docker', url: 'http://a.test/api/health', expect: [200] },
+        { id: 'b@docker', url: 'http://b.test', expect: null },
+      ]);
+      assert.deepEqual(store.getRoutesWithHealth().map(route => [route.health.url, route.health.expect]), [['http://a.test/api/health', [200]], ['http://b.test', null]]);
+    });
+
+    it('never checks a route whose check is turned off, and forgets its last result', async () => {
+      const store = settingsStore();
+      await store.refresh();
+      await store.refreshHealth();
+      settings = { 'b@docker': { health: { check: false } } };
+      clock += HOUR;
+      assert.equal(await store.refreshHealth(), true);
+      assert.deepEqual(targets.map(target => target.id), ['a@docker', 'b@docker', 'a@docker']);
+      assert.equal(store.getRoutesWithHealth()[1].health, null);
+      assert.equal(await store.checkRoute('b@docker'), null);
+    });
+
+    it('checks a route again straight away when its health path or expected codes change', async () => {
+      const store = settingsStore();
+      await store.refresh();
+      await store.refreshHealth();
+      settings = { 'a@docker': { health: { path: '/health' } } };
+      await store.refreshHealth();
+      settings = { 'a@docker': { health: { path: '/health', expect: [204] } } };
+      await store.refreshHealth();
+      await store.refreshHealth();
+      assert.deepEqual(targets.map(target => target.id), ['a@docker', 'b@docker', 'a@docker', 'a@docker']);
+    });
+
+    it('checks the health path when asked for one route', async () => {
+      settings = { 'a@docker': { health: { path: '/health' } } };
+      const store = settingsStore();
+      await store.refresh();
+      const route = await store.checkRoute('a@docker');
+      assert.equal(route.health.url, 'http://a.test/health');
+    });
+
+    it('ignores settings inherited from Object, for a router named after one of its properties', async () => {
+      routers = [{ name: 'constructor', rule: 'Host(`c.test`)' }];
+      const store = settingsStore();
+      await store.refresh();
+      await store.refreshHealth();
+      assert.deepEqual(targets, [{ id: 'constructor', url: 'http://c.test', expect: null }]);
+    });
+  });
+
   it('has no results until the first check', async () => {
     const store = makeStore();
     await store.refresh();
@@ -182,11 +252,14 @@ describe('createRouteStore health checks', () => {
 
   it('keeps the newer result when an older check finishes after it', async () => {
     let release;
+    let started;
     const gate = new Promise(resolve => { release = resolve; });
+    const slowStarted = new Promise(resolve => { started = resolve; });
     const checkRoutes = async routes => {
       const checkedAt = new Date(clock).toISOString();
       if (!checked.length) {
         checked.push('slow');
+        started();
         await gate;
       }
       return new Map(routes.map(route => [route.id, { reachable: true, statusCode: 200, checkedAt }]));
@@ -194,6 +267,7 @@ describe('createRouteStore health checks', () => {
     const store = makeStore({ checkRoutes });
     await store.refresh();
     const slow = store.refreshHealth();
+    await slowStarted;
     clock += 60 * 1000;
     await store.checkRoute('a@docker');
     release();

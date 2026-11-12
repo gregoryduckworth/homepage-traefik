@@ -341,6 +341,72 @@ describe('server events', () => {
   });
 });
 
+describe('server health settings', () => {
+  let dir;
+  let server;
+  let store;
+  let checked;
+  let base;
+
+  before(async () => {
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'homepage-health-'));
+    const config = createConfigStore({ file: path.join(dir, 'homepage.json') });
+    checked = [];
+    const checkRoutes = async targets => {
+      checked.push(...targets.map(target => target.url));
+      return new Map(targets.map(target => [target.id, { reachable: true, statusCode: 200, checkedAt: new Date().toISOString() }]));
+    };
+    const fetchImpl = async url => routersResponse(url, [{ name: 'app@docker', rule: 'Host(`app.test`)', status: 'enabled' }]);
+    store = createRouteStore({ traefikUrl: 'http://traefik:8080', fetchImpl, checkRoutes, routeSettings: async () => (await config.read()).routes });
+    server = createServer({ store, config, title: 'Lab', check: store.checkRoute });
+    await new Promise(resolve => server.listen(0, resolve));
+    base = `http://127.0.0.1:${server.address().port}`;
+    await store.refresh();
+    await store.refreshHealth();
+  });
+
+  after(async () => {
+    server.close();
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  const putRoute = body => fetch(`${base}/api/routes/app%40docker`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const routes = async () => (await (await fetch(`${base}/api/routes`)).json()).routes;
+
+  async function until(condition) {
+    for (let i = 0; i < 100 && !condition(); i++) await new Promise(resolve => setTimeout(resolve, 5));
+    assert.ok(condition());
+  }
+
+  it('checks the new health path straight away, without showing the old result meanwhile', async () => {
+    const res = await putRoute({ health: { path: '/api/health', expect: [200] } });
+    assert.deepEqual(await res.json(), { custom: { health: { path: '/api/health', expect: [200] } } });
+    await until(() => checked.includes('http://app.test/api/health'));
+    const [route] = await routes();
+    assert.deepEqual([route.health.url, route.health.expect], ['http://app.test/api/health', [200]]);
+    assert.deepEqual(route.custom.health, { path: '/api/health', expect: [200] });
+  });
+
+  it('shows no health for a route whose check is turned off, and refuses to check it', async () => {
+    const before = checked.length;
+    await putRoute({ health: { check: false } });
+    const [route] = await routes();
+    assert.equal(route.health, null);
+    const res = await fetch(`${base}/api/check/app%40docker`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    assert.equal(res.status, 404);
+    assert.equal(checked.length, before);
+  });
+
+  it('does not check again when a save leaves the health settings as they were', async () => {
+    await putRoute({ health: null });
+    await until(() => checked.at(-1) === 'http://app.test');
+    const before = checked.length;
+    await putRoute({ name: 'App' });
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(checked.length, before);
+  });
+});
+
 describe('server checks', () => {
   it('runs one check of a route at a time, answering every request with it', async () => {
     let calls = 0;

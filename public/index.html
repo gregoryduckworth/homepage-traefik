@@ -74,7 +74,7 @@
     <p class="visually-hidden" id="details-moved" aria-live="polite"></p>
     <button type="button" class="button-quiet details-edit" id="details-check">Check now</button>
     <p class="group-error details-check-error" id="details-check-error" role="alert" hidden></p>
-    <button type="button" class="button-quiet details-edit" id="details-edit">Change name or icon</button>
+    <button type="button" class="button-quiet details-edit" id="details-edit">Change settings</button>
     <button type="button" class="button-quiet details-edit" id="details-hide">Hide route</button>
     <a class="details-open" id="details-open" target="_blank" rel="noopener noreferrer" hidden></a>
   </dialog>
@@ -94,12 +94,23 @@
 
   <dialog class="details group-dialog" id="route-dialog" aria-labelledby="route-dialog-title">
     <form id="route-form" novalidate>
-      <h2 id="route-dialog-title">Name and icon</h2>
+      <h2 id="route-dialog-title">Route settings</h2>
       <label for="route-name">Name</label>
       <input id="route-name" maxlength="60" autocomplete="off">
       <label for="route-icon">Icon address</label>
       <input id="route-icon" type="url" maxlength="2048" autocomplete="off" spellcheck="false" aria-describedby="route-hint">
       <p class="field-hint" id="route-hint">The address of an image. Leave a field empty to use the router name, or the icon found on the site.</p>
+      <fieldset class="route-health">
+        <legend>Health check</legend>
+        <label class="checkbox-field"><input id="route-check" type="checkbox" aria-describedby="route-check-hint"> Check this route</label>
+        <p class="field-hint" id="route-check-hint">Turn it off for a route that’s meant to be off at times, or that mustn’t be woken by a request.</p>
+        <label for="route-health-path">Path to check</label>
+        <input id="route-health-path" maxlength="2048" autocomplete="off" spellcheck="false" aria-describedby="route-health-path-hint">
+        <p class="field-hint" id="route-health-path-hint">Requested on the route’s host instead of its own address, such as /health or /api/health.</p>
+        <label for="route-health-expect">Status codes that count as up</label>
+        <input id="route-health-expect" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="Any below 500" aria-describedby="route-health-expect-hint">
+        <p class="field-hint" id="route-health-expect-hint">Separated by commas, such as 200, 204. A 5xx always counts as down.</p>
+      </fieldset>
       <p class="group-error" id="route-error" role="alert" hidden></p>
       <div class="group-actions">
         <button type="button" class="button-quiet" id="route-cancel">Cancel</button>

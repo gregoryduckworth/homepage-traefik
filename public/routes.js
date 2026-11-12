@@ -27,18 +27,37 @@ function failureLabel({ error, phase, certificateError }) {
   return phase === 'tls' || error?.startsWith('ERR_SSL') ? 'TLS error' : 'Down';
 }
 
+// A route's health check settings from the config file, or null when it has none.
+function healthSetting(route) {
+  return route.custom?.health ?? null;
+}
+
+// Whether the route's health check was turned off in its settings.
+function isTurnedOff(route) {
+  return healthSetting(route)?.check === false;
+}
+
 // Traefik's router status wins over the probe: a disabled router can't be up.
 export function statusOf(route) {
   if (route.status === 'disabled') return { kind: 'off', label: 'Disabled' };
   if (route.status === 'warning') return { kind: 'warn', label: 'Warning' };
   if (route.protocol === 'tcp') return { kind: 'off', label: 'TCP' };
   if (!route.url) return { kind: 'off', label: 'No link' };
+  if (isTurnedOff(route)) return { kind: 'off', label: 'Not checked' };
   if (!route.health) return { kind: 'checking', label: 'Checking' };
   if (!route.health.reachable) return { kind: 'down', label: failureLabel(route.health) };
-  if (route.health.statusCode >= 500) return { kind: 'down', label: `HTTP ${route.health.statusCode}` };
+  // A status the route's health settings don't count as up is down, as a 5xx always is.
+  if (route.health.statusCode >= 500 || route.health.unexpected) return { kind: 'down', label: `HTTP ${route.health.statusCode}` };
   // Traefik's own 404: the check didn't reach the route, though the route may still work in a browser.
   if (route.health.unrouted) return { kind: 'warn', label: 'No router' };
   return { kind: 'up', label: 'Up' };
+}
+
+// The status codes typed into the route dialog, such as "200, 204", as a list of numbers, or null when any isn't a
+// three-digit number. The server says which numbers it won't take, such as a 5xx.
+export function parseStatusCodes(text) {
+  const parts = text.split(/[\s,]+/).filter(Boolean);
+  return parts.every(part => /^\d{3}$/.test(part)) ? parts.map(Number) : null;
 }
 
 // A name set on the page wins over the router name, which reads better than the hostname.
@@ -46,10 +65,11 @@ export function displayName(route) {
   return route.custom?.name || route.name;
 }
 
-// Whether the server checks the route, as its isCheckable decides: disabled routes and those with no web address,
-// such as TCP routes, are never checked, so they can't be checked now and have no history.
+// Whether the server checks the route, as its isCheckable decides: disabled routes, those with no web address, such
+// as TCP routes, and those whose check is turned off are never checked, so they can't be checked now and have no
+// history.
 export function isChecked(route) {
-  return Boolean(route.url) && route.status !== 'disabled';
+  return Boolean(route.url) && route.status !== 'disabled' && !isTurnedOff(route);
 }
 
 export function isHidden(route) {
@@ -75,15 +95,22 @@ function healthText(route) {
   if (route.status === 'disabled') return 'Not checked while the router is disabled';
   if (route.protocol === 'tcp') return 'Not checked: TCP routes have no web address to request';
   if (!route.url) return 'Not checked: the rule has no Host to request';
+  if (isTurnedOff(route)) return 'Not checked: the check is turned off in the route’s settings';
   if (!health) return 'Waiting for the first check';
   if (!health.reachable) return `${health.detail || 'The request failed.'} (${health.error})`;
-  if (health.unrouted) return health.detail;
+  if (health.unrouted || health.unexpected) return health.detail;
   return `HTTP ${health.statusCode} in ${health.latencyMs} ms`;
 }
 
 function attemptText(health) {
   if (!health?.method) return null;
   return health.attempts > 1 ? 'HEAD, then retried with GET' : health.method;
+}
+
+// The status codes that count as up, when the route's settings name them rather than any below 500.
+function expectText(route) {
+  const expect = isChecked(route) && healthSetting(route)?.expect;
+  return expect?.length ? expect.join(', ') : null;
 }
 
 function tlsText(route) {
@@ -98,6 +125,9 @@ export function detailRows(route) {
     ['Status', status.kind === 'checking' ? 'Checking' : status.label],
     ['Health check', healthText(route)],
     ['Checked with', attemptText(route.health)],
+    // Only when it's somewhere other than the address the route links to, as when its settings give a health path.
+    ['Checked URL', route.health?.url !== route.url ? route.health?.url : null],
+    ['Counts as up', expectText(route)],
     ['Checked address', route.health?.address],
     ['Last checked', route.health?.checkedAt && timeOf(route.health.checkedAt)],
     ['Traefik status', route.status],

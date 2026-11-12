@@ -132,16 +132,28 @@ function probe(url, { method, timeoutMs, lookup = dns.lookup }) {
   });
 }
 
-// Any HTTP response below 500 means the route is reachable; the UI decides how to present the status code.
-// HEAD is cheap, but some apps reject it with a 5xx or never answer it, so a failed HEAD is retried once with GET.
-async function checkHealth(url, { timeoutMs = DEFAULT_TIMEOUT_MS, address, lookup } = {}) {
+// The status codes that count as up: those in `expect` when it's given, otherwise any below 500.
+function countsAsUp(statusCode, expect) {
+  return expect ? expect.includes(statusCode) : statusCode < 500;
+}
+
+function codesText(codes) {
+  const list = codes.map(code => `HTTP ${code}`);
+  return list.length > 1 ? `${list.slice(0, -1).join(', ')} or ${list.at(-1)}` : list[0];
+}
+
+// Any HTTP response below 500 means the route is reachable; the UI decides how to present the status code. `expect`,
+// when given, lists the only status codes that count as up, and a response with another is marked `unexpected`.
+// HEAD is cheap, but some apps reject it with a 5xx or never answer it, so a failed HEAD is retried once with GET, as
+// is one whose status doesn't count as up.
+async function checkHealth(url, { timeoutMs = DEFAULT_TIMEOUT_MS, address, lookup, expect = null } = {}) {
   const checkedAt = new Date().toISOString();
   const host = new URL(url).hostname;
   const opts = { timeoutMs, lookup: lookupFor({ address, lookup }) };
 
   let attempt = await probe(url, { ...opts, method: 'HEAD' });
   let method = 'HEAD';
-  const retry = attempt.ok ? attempt.statusCode >= 500 : RETRYABLE.has(attempt.error);
+  const retry = attempt.ok ? !countsAsUp(attempt.statusCode, expect) : RETRYABLE.has(attempt.error);
   if (retry) {
     attempt = await probe(url, { ...opts, method: 'GET' });
     method = 'GET';
@@ -149,10 +161,15 @@ async function checkHealth(url, { timeoutMs = DEFAULT_TIMEOUT_MS, address, looku
 
   const base = { method, attempts: retry ? 2 : 1, address: attempt.address, checkedAt };
   if (attempt.ok) {
-    const detail = attempt.unrouted
-      ? `${attempt.address || host} answered "404 page not found", which is what Traefik sends when none of its routers match ${host}. The check may have reached a different Traefik, or an entry point the route isn't on.`
-      : null;
-    return { reachable: true, statusCode: attempt.statusCode, latencyMs: attempt.latencyMs, unrouted: attempt.unrouted, error: null, phase: null, detail, ...base };
+    // A 5xx is down whatever `expect` says, so only a response below 500 is called unexpected.
+    const unexpected = attempt.statusCode < 500 && !countsAsUp(attempt.statusCode, expect);
+    let detail = null;
+    if (attempt.unrouted) {
+      detail = `${attempt.address || host} answered "404 page not found", which is what Traefik sends when none of its routers match ${host}. The check may have reached a different Traefik, or an entry point the route isn't on.`;
+    } else if (unexpected) {
+      detail = `${host} answered HTTP ${attempt.statusCode}, which this route's health check doesn't count as up. Only ${codesText(expect)} does.`;
+    }
+    return { reachable: true, statusCode: attempt.statusCode, latencyMs: attempt.latencyMs, unrouted: attempt.unrouted, unexpected, error: null, phase: null, detail, ...base };
   }
   const detail = describeFailure({ ...attempt, host, timeoutMs });
   // Said outright so the page needn't keep its own list of certificate error codes.
@@ -160,15 +177,30 @@ async function checkHealth(url, { timeoutMs = DEFAULT_TIMEOUT_MS, address, looku
   return { reachable: false, statusCode: null, latencyMs: null, error: attempt.error, phase: attempt.phase, certificateError, detail, ...base };
 }
 
-function isCheckable(route) {
-  return Boolean(route.url) && route.status !== 'disabled';
+// What a route's health check requests and the status codes that count as up, as { url, expect }, or null when the
+// route isn't checked: when it has no web address, such as a TCP route, its router is disabled, or `health`, the
+// route's health settings from the config file, turn the check off. A `path` there is requested on the route's own
+// host and port instead of its path.
+function checkTarget(route, health = null) {
+  if (!route.url || route.status === 'disabled' || health?.check === false) return null;
+  return { url: health?.path ? new URL(health.path, route.url).href : route.url, expect: health?.expect ?? null };
+}
+
+function isCheckable(route, health = null) {
+  return Boolean(checkTarget(route, health));
+}
+
+// Whether a health result, which records the URL and status codes it checked, is a check of `target`, so a result
+// from before the route's health settings changed isn't shown as the route's health.
+function isCurrent(result, target) {
+  return Boolean(result && target) && result.url === target.url && String(result.expect ?? null) === String(target.expect);
 }
 
 // Checks run a few at a time: firing every probe at once makes slow hosts (and Traefik itself) queue up and time out.
-async function checkAllRoutes(routes, { concurrency = DEFAULT_CONCURRENCY, ...opts } = {}) {
-  const probed = routes.filter(isCheckable);
-  const results = await mapLimit(probed, concurrency, route => checkHealth(route.url, opts));
-  return new Map(probed.map((route, index) => [route.id, results[index]]));
+// `targets` are { id, url, expect }, as checkTarget gives them with the route's id. Resolves to the results by id.
+async function checkAllRoutes(targets, { concurrency = DEFAULT_CONCURRENCY, ...opts } = {}) {
+  const results = await mapLimit(targets, concurrency, ({ url, expect }) => checkHealth(url, { ...opts, expect }));
+  return new Map(targets.map((target, index) => [target.id, results[index]]));
 }
 
-module.exports = { DEFAULT_TIMEOUT_MS, checkHealth, checkAllRoutes, describeFailure, isCheckable, isTraefikNotFound, lookupFor };
+module.exports = { DEFAULT_TIMEOUT_MS, checkHealth, checkAllRoutes, checkTarget, describeFailure, isCheckable, isCurrent, isTraefikNotFound, lookupFor };

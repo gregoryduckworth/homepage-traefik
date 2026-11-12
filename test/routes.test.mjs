@@ -2,7 +2,7 @@
 // Node has to work out that it's an ES module, which the test scripts don't warn about.
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { addressOf, byName, detailRows, displayName, groupKey, isChecked, isHidden, matches, sectionsFor, statusOf } from '../public/routes.js';
+import { addressOf, byName, detailRows, displayName, groupKey, isChecked, isHidden, matches, parseStatusCodes, sectionsFor, statusOf } from '../public/routes.js';
 
 function route(fields = {}) {
   return {
@@ -38,9 +38,11 @@ describe('statusOf', () => {
     ['a router with a warning', route({ status: 'warning' }), 'warn', 'Warning'],
     ['a TCP router', route({ protocol: 'tcp', url: null, health: null }), 'off', 'TCP'],
     ['a router with no Host', route({ url: null, health: null }), 'off', 'No link'],
+    ['a route whose check is turned off, whatever its last check says', route({ custom: { health: { check: false } } }), 'off', 'Not checked'],
     ['a route not checked yet', route({ health: null }), 'checking', 'Checking'],
     ['a route that answered below 500', route(), 'up', 'Up'],
     ['a route that answered with a 5xx', route({ health: { reachable: true, statusCode: 502 } }), 'down', 'HTTP 502'],
+    ['a status its health settings don\'t count as up', route({ health: { reachable: true, statusCode: 302, unexpected: true } }), 'down', 'HTTP 302'],
     ['Traefik\'s own 404', route({ health: { reachable: true, statusCode: 404, unrouted: true } }), 'warn', 'No router'],
     ['a timeout', down({ error: 'TIMEOUT' }), 'down', 'Timed out'],
     ['a DNS failure', down({ error: 'ENOTFOUND' }), 'down', 'DNS failed'],
@@ -76,6 +78,25 @@ describe('isChecked', () => {
 
   it('is false for a route with no web address', () => {
     assert.equal(isChecked(route({ url: null })), false);
+  });
+
+  it('is false for a route whose check is turned off in its settings', () => {
+    assert.equal(isChecked(route({ custom: { health: { check: false } } })), false);
+    assert.equal(isChecked(route({ custom: { health: { path: '/health' } } })), true);
+  });
+});
+
+describe('parseStatusCodes', () => {
+  it('reads codes separated by commas or spaces', () => {
+    assert.deepEqual(parseStatusCodes(' 200, 204 301'), [200, 204, 301]);
+  });
+
+  it('reads an empty field as no codes', () => {
+    assert.deepEqual(parseStatusCodes('  '), []);
+  });
+
+  it('is null when anything isn\'t a three-digit number', () => {
+    for (const text of ['2xx', '200, ok', '20', '2000', '200.5']) assert.equal(parseStatusCodes(text), null, text);
   });
 });
 
@@ -155,6 +176,30 @@ describe('detailRows', () => {
     assert.equal(details.Protocol, 'TCP');
     assert.equal('Service' in details, false);
     assert.equal('Checked with' in details, false);
+  });
+
+  it('shows the URL checked when it isn\'t the route\'s own, and the codes that count as up', () => {
+    const details = rows(route({
+      url: 'https://app.lab',
+      custom: { health: { path: '/api/health', expect: [200, 204] } },
+      health: { reachable: true, statusCode: 302, unexpected: true, detail: 'app.lab answered HTTP 302.', url: 'https://app.lab/api/health' },
+    }));
+    assert.equal(details.Status, 'HTTP 302');
+    assert.equal(details['Health check'], 'app.lab answered HTTP 302.');
+    assert.equal(details['Checked URL'], 'https://app.lab/api/health');
+    assert.equal(details['Counts as up'], '200, 204');
+  });
+
+  it('leaves out the checked URL when it is the route\'s own', () => {
+    const details = rows(route({ url: 'https://app.lab', health: { reachable: true, statusCode: 200, latencyMs: 5, url: 'https://app.lab' } }));
+    assert.equal('Checked URL' in details, false);
+    assert.equal('Counts as up' in details, false);
+  });
+
+  it('says a route whose check is turned off isn\'t checked', () => {
+    const details = rows(route({ custom: { health: { check: false, expect: [200] } }, health: null }));
+    assert.equal(details['Health check'], 'Not checked: the check is turned off in the route’s settings');
+    assert.equal('Counts as up' in details, false);
   });
 
   it('shows the rule as code', () => {

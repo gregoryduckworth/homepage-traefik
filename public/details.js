@@ -1,10 +1,11 @@
 // A route's details panel, which shows how the route has done over the last day, and from which it can be checked,
-// moved to a group or up and down within one, hidden or shown, and given its own name and icon in a dialog of its own.
+// moved to a group or up and down within one, hidden or shown, and given its own name, icon and health check settings in
+// a dialog of its own.
 import { getJson, post, putJson } from './api.js';
 import { $, el, closeOnBackdrop } from './dom.js';
 import { groupOf } from './groups.js';
 import { bucketKind, bucketLabel, historyText, stripLabel } from './history.js';
-import { addressOf, detailRows, displayName, isChecked, isHidden, statusOf } from './routes.js';
+import { addressOf, detailRows, displayName, isChecked, isHidden, parseStatusCodes, statusOf } from './routes.js';
 
 // `routeOf` finds a route the page lists by id, and `groups` returns the custom groups. `moveRoute` puts a route in
 // a group, or in none. `placeOf` returns the custom group a route is in and the ids of the routes the page lists in
@@ -28,6 +29,9 @@ export function createDetails({ routeOf, groups, moveRoute, placeOf, shiftRoute,
     routeForm: $('route-form'),
     routeName: $('route-name'),
     routeIcon: $('route-icon'),
+    routeCheck: $('route-check'),
+    routeHealthPath: $('route-health-path'),
+    routeHealthExpect: $('route-health-expect'),
     routeError: $('route-error'),
     routeSubmit: $('route-submit'),
     history: $('details-history'),
@@ -227,8 +231,17 @@ export function createDetails({ routeOf, groups, moveRoute, placeOf, shiftRoute,
     load();
   });
 
-  // Names and icons are saved one route at a time, and the dialog stays open until the server has the change.
+  // Names, icons and health check settings are saved one route at a time, and the dialog stays open until the server
+  // has the change.
   let editingRoute = null;
+
+  // The path and status codes stay as they were while the check is off, so turning it back on restores them, but
+  // can't be changed.
+  function showCheckFields() {
+    els.routeHealthPath.disabled = els.routeHealthExpect.disabled = !els.routeCheck.checked;
+  }
+
+  els.routeCheck.addEventListener('change', showCheckFields);
 
   els.edit.addEventListener('click', () => {
     const route = routeOf(detailsId);
@@ -238,22 +251,39 @@ export function createDetails({ routeOf, groups, moveRoute, placeOf, shiftRoute,
     els.routeName.placeholder = route.name;
     els.routeIcon.value = route.custom?.icon || '';
     els.routeIcon.placeholder = route.icon ? 'The site’s own icon' : 'https://…';
+    const health = route.custom?.health;
+    els.routeCheck.checked = health?.check !== false;
+    els.routeHealthPath.value = health?.path || '';
+    els.routeHealthPath.placeholder = route.path || '/';
+    els.routeHealthExpect.value = health?.expect?.join(', ') || '';
+    showCheckFields();
     els.routeError.hidden = true;
     els.routeSubmit.disabled = false;
     els.routeDialog.showModal();
   });
 
+  function showRouteError(message) {
+    els.routeError.textContent = message;
+    els.routeError.hidden = false;
+  }
+
   els.routeForm.addEventListener('submit', async event => {
     event.preventDefault();
+    const expect = parseStatusCodes(els.routeHealthExpect.value);
+    if (!expect) {
+      showRouteError('Enter the status codes that count as up as numbers, separated by commas, such as 200, 204.');
+      els.routeHealthExpect.focus();
+      return;
+    }
     els.routeSubmit.disabled = true;
+    const health = { path: els.routeHealthPath.value, check: els.routeCheck.checked, expect };
     try {
-      await saveRoute(editingRoute, { name: els.routeName.value, icon: els.routeIcon.value });
+      await saveRoute(editingRoute, { name: els.routeName.value, icon: els.routeIcon.value, health });
       els.routeDialog.close();
       render();
       load();
     } catch (err) {
-      els.routeError.textContent = err.message;
-      els.routeError.hidden = false;
+      showRouteError(err.message);
       els.routeSubmit.disabled = false;
     }
   });

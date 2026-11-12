@@ -51,6 +51,12 @@ describe('history summary', () => {
     assert.equal(history.summary('a').down, 1);
   });
 
+  it('counts a status the route\'s health settings don\'t count as up as a failure', () => {
+    const history = historyAt();
+    history.record('a', 'https://a.test', { ...up(NOW), statusCode: 302, unexpected: true });
+    assert.equal(history.summary('a').down, 1);
+  });
+
   it('splits the day into 48 half hours on the clock, the last being the one under way', () => {
     const summary = historyAt().summary('a');
 
