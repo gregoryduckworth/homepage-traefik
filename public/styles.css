@@ -635,6 +635,29 @@ a.tile-link:hover .tile-name { color: var(--accent); }
 .details-group select:focus,
 .group-dialog input:focus { border-color: var(--accent); outline: none; }
 
+/* Draw the select's arrow ourselves so it sits as far in from the right
+   edge as the text does from the left, instead of the native arrow's
+   browser-specific spot hard against the border. */
+.details-group { position: relative; }
+.details-group select { appearance: none; padding-right: 2.25rem; cursor: pointer; }
+.details-group::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: 0.75rem;
+  width: 0.75rem;
+  height: 0.75rem;
+  transform: translateY(-50%);
+  background: var(--muted);
+  /* A file rather than a data: URL, which the page's Content-Security-Policy blocks. */
+  mask: url("chevron.svg") center / contain no-repeat;
+  pointer-events: none;
+}
+
+@media (forced-colors: active) {
+  .details-group::after { forced-color-adjust: none; background: CanvasText; }
+}
+
 /* Group name dialog */
 
 .group-dialog { width: min(24rem, calc(100% - 2rem)); }
