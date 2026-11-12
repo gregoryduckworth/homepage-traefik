@@ -3,7 +3,7 @@ import { watchChanges } from './changes.js';
 import { createDetails } from './details.js';
 import { createDragAndDrop } from './drag.js';
 import { $, el, closeOnBackdrop, iconButton, plural, INFO_ICON, RENAME_ICON, DELETE_ICON, UP_ICON, DOWN_ICON } from './dom.js';
-import { createGroups, groupOf, withGroupMoved, withGroupShifted, withRouteMoved } from './groups.js';
+import { createGroups, groupOf, withGroupMoved, withGroupShifted, withRouteMoved, withRouteShifted } from './groups.js';
 import { addressOf, byName, displayName, isHidden, sectionsFor, statusOf } from './routes.js';
 import './theme-toggle.js';
 
@@ -208,17 +208,22 @@ function renderNotice() {
   els.notice.hidden = !notices.length;
 }
 
+// What the page shows: routes matching the search, and hidden routes only when someone chose to show them.
+function view() {
+  return { query: els.filter.value.trim().toLowerCase(), showHidden };
+}
+
 function render() {
   if (drag.isDragging()) {
     renderPending = true;
     return;
   }
   renderPending = false;
-  const query = els.filter.value.trim().toLowerCase();
   const hiddenCount = data.routes.filter(isHidden).length;
   // Once nothing is hidden, the next route hidden should leave the page rather than stay on it dimmed.
   if (!hiddenCount) showHidden = false;
-  const { shown: visible, sections } = sectionsFor(data.routes, groups.list, { query, showHidden });
+  const { query } = view();
+  const { shown: visible, sections } = sectionsFor(data.routes, groups.list, view());
 
   // Rebuilding the list drops focus, so put it back on the button with the same label.
   const focused = els.routes.contains(document.activeElement) ? document.activeElement.getAttribute('aria-label') : null;
@@ -263,6 +268,20 @@ function render() {
 function moveRoute(id, target, beforeId) {
   if (id === beforeId) return;
   groups.save(withRouteMoved(groups.list, id, target, beforeId));
+}
+
+// The custom group a route is in and the routes the page lists in it, in order, or null for a route in no group.
+function placeOf(id) {
+  const group = groupOf(groups.list, id);
+  if (!group) return null;
+  const section = sectionsFor(data.routes, groups.list, view()).sections.find(s => s.group === group);
+  return { group: group.name, listed: section ? section.routes.map(route => route.id) : [] };
+}
+
+// Moves a route one place up or down among the routes the page lists in its group.
+function shiftRoute(id, step) {
+  const place = placeOf(id);
+  if (place) groups.save(withRouteShifted(groups.list, id, step, place.listed));
 }
 
 function moveGroup(name, beforeName) {
@@ -320,6 +339,8 @@ const details = createDetails({
   routeOf: id => data.routes.find(route => route.id === id),
   groups: () => groups.list,
   moveRoute,
+  placeOf,
+  shiftRoute,
   showingHidden: () => showHidden,
   render,
   load,

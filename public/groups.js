@@ -18,6 +18,20 @@ export function withRouteMoved(groups, id, target, beforeId = null) {
   return moved;
 }
 
+// Moves a route one place up (a `step` of -1) or down (1) among `listed`, the routes in its group that the page lists,
+// in order. Routes the page leaves out, such as hidden ones, keep their places. A route already at the top or bottom,
+// or in no group, stays put.
+export function withRouteShifted(groups, id, step, listed) {
+  const group = groupOf(groups, id);
+  const index = listed.indexOf(id);
+  const neighbour = listed[index + step];
+  if (!group || index < 0 || !neighbour) return groups;
+  // Up goes in front of the neighbour; down, in front of whatever follows the neighbour in the group, or last.
+  const others = group.routes.filter(routeId => routeId !== id);
+  const beforeId = step < 0 ? neighbour : others[others.indexOf(neighbour) + 1] ?? null;
+  return withRouteMoved(groups, id, group.name, beforeId);
+}
+
 // Puts a group in front of another one, or last when there's no other one.
 export function withGroupMoved(groups, name, beforeName) {
   const group = groups.find(g => g.name === name);

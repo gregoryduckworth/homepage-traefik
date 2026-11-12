@@ -61,6 +61,11 @@
       <span>Group</span>
       <select id="details-group"></select>
     </label>
+    <div class="details-order" id="details-order" hidden>
+      <button type="button" class="button-quiet" id="details-up">Move up</button>
+      <button type="button" class="button-quiet" id="details-down">Move down</button>
+    </div>
+    <p class="visually-hidden" id="details-moved" aria-live="polite"></p>
     <button type="button" class="button-quiet details-edit" id="details-check">Check now</button>
     <p class="group-error details-check-error" id="details-check-error" role="alert" hidden></p>
     <button type="button" class="button-quiet details-edit" id="details-edit">Change name or icon</button>

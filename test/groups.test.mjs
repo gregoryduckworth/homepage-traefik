@@ -1,7 +1,7 @@
 // The page's group logic. It runs in the browser, but needs nothing from it.
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { createGroups, groupOf, withGroupMoved, withGroupShifted, withRouteMoved } from '../public/groups.js';
+import { createGroups, groupOf, withGroupMoved, withGroupShifted, withRouteMoved, withRouteShifted } from '../public/groups.js';
 
 const GROUPS = [
   { name: 'Media', routes: ['jellyfin', 'sonarr'] },
@@ -45,6 +45,39 @@ describe('withRouteMoved', () => {
   it('leaves the groups it was given alone', () => {
     withRouteMoved(GROUPS, 'sonarr', 'Tools');
     assert.deepEqual(GROUPS[1].routes, ['grafana']);
+  });
+});
+
+describe('withRouteShifted', () => {
+  const groups = [{ name: 'Media', routes: ['a', 'b', 'c', 'd'] }, { name: 'Tools', routes: ['grafana'] }];
+  const routesOf = moved => moved[0].routes;
+
+  const cases = [
+    ['moves a route up one place', 'c', -1, ['a', 'b', 'c', 'd'], ['a', 'c', 'b', 'd']],
+    ['moves a route down one place', 'b', 1, ['a', 'b', 'c', 'd'], ['a', 'c', 'b', 'd']],
+    ['moves the second-to-last route to the bottom', 'c', 1, ['a', 'b', 'c', 'd'], ['a', 'b', 'd', 'c']],
+    ['steps over a route the page leaves out when moving up', 'c', -1, ['a', 'c', 'd'], ['c', 'a', 'b', 'd']],
+    ['steps over a route the page leaves out when moving down', 'a', 1, ['a', 'c', 'd'], ['b', 'c', 'a', 'd']],
+    ['leaves routes the page leaves out after the last one listed where they are', 'b', 1, ['a', 'b', 'c'], ['a', 'c', 'b', 'd']],
+  ];
+  for (const [name, id, step, listed, expected] of cases) {
+    it(name, () => {
+      assert.deepEqual(routesOf(withRouteShifted(groups, id, step, listed)), expected);
+    });
+  }
+
+  it('leaves the top route where it is when moved up, and the bottom one when moved down', () => {
+    assert.equal(withRouteShifted(groups, 'a', -1, ['a', 'b', 'c', 'd']), groups);
+    assert.equal(withRouteShifted(groups, 'd', 1, ['a', 'b', 'c', 'd']), groups);
+  });
+
+  it('changes nothing for a route in no group, or one the page does not list', () => {
+    assert.equal(withRouteShifted(groups, 'traefik', 1, ['a', 'b']), groups);
+    assert.equal(withRouteShifted(groups, 'b', 1, ['a', 'c']), groups);
+  });
+
+  it('leaves the other groups alone', () => {
+    assert.deepEqual(withRouteShifted(groups, 'b', -1, ['a', 'b', 'c', 'd'])[1], groups[1]);
   });
 });
 

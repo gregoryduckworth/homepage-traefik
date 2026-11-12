@@ -72,6 +72,64 @@ test('groups can be reordered with their arrow buttons', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Move Second up' })).toBeDisabled();
 });
 
+test('a route can be moved up and down its group from its details with the keyboard alone', async ({ page, homepage }) => {
+  await page.request.put(`${homepage.url}api/groups`, {
+    data: { groups: [{ name: 'Media', routes: ['grafana@docker', 'jellyfin@docker', 'sonarr@docker'] }] },
+  });
+  await page.reload();
+  const tiles = group(page, 'Media').getByRole('listitem');
+  await expect(tiles).toHaveCount(3);
+  await expect(tiles).toContainText(['grafana', 'jellyfin', 'sonarr']);
+
+  await details(page, 'jellyfin').focus();
+  await page.keyboard.press('Enter');
+  const dialog = page.getByRole('dialog', { name: 'jellyfin' });
+  const up = dialog.getByRole('button', { name: 'Move up' });
+  const down = dialog.getByRole('button', { name: 'Move down' });
+  const announcement = dialog.getByText(/^Moved to/);
+  await expect(dialog.getByRole('button', { name: 'Close' })).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(dialog.getByLabel('Group')).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(up).toBeFocused();
+
+  // At the top, Move up is disabled, so focus goes to Move down.
+  await page.keyboard.press('Enter');
+  await expect(announcement).toHaveText('Moved to 1 of 3 in Media');
+  await expect(up).toBeDisabled();
+  await expect(down).toBeFocused();
+  await expect(tiles).toContainText(['jellyfin', 'grafana', 'sonarr']);
+
+  await page.keyboard.press('Enter');
+  await expect(announcement).toHaveText('Moved to 2 of 3 in Media');
+  await expect(down).toBeFocused();
+
+  // At the bottom, it's the other way round.
+  await page.keyboard.press('Enter');
+  await expect(announcement).toHaveText('Moved to 3 of 3 in Media');
+  await expect(down).toBeDisabled();
+  await expect(up).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeHidden();
+
+  await expect(tiles).toContainText(['grafana', 'sonarr', 'jellyfin']);
+  await expect.poll(async () => (await homepage.readConfig()).groups)
+    .toEqual([{ name: 'Media', routes: ['grafana@docker', 'sonarr@docker', 'jellyfin@docker'] }]);
+  await page.reload();
+  await expect(tiles).toContainText(['grafana', 'sonarr', 'jellyfin']);
+});
+
+test('a route in no group, or alone in its group, has no buttons to move it', async ({ page }) => {
+  await createGroup(page, 'Media');
+  await details(page, 'jellyfin').click();
+  const dialog = page.getByRole('dialog', { name: 'jellyfin' });
+  await expect(dialog.getByRole('button', { name: 'Move up' })).toBeHidden();
+
+  await dialog.getByLabel('Group').selectOption('Media');
+  await expect(details(group(page, 'Media'), 'jellyfin')).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Move up' })).toBeHidden();
+});
+
 test('a group dragged by its heading onto the top half of another goes above it', async ({ page, homepage }) => {
   await createGroup(page, 'First');
   await createGroup(page, 'Second');
