@@ -129,8 +129,8 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # Signed provenance for each published image: which workflow, commit and repository built it. The README says
-      # how to check it. Storage records are only for repositories owned by an organization.
+      # Signed provenance for each published image: which workflow, commit and repository built it. The docs say
+      # how to check it, in Getting started. Storage records are only for repositories owned by an organization.
       - uses: actions/attest@v4
         if: github.event_name != 'pull_request'
         with:

@@ -1,0 +1,64 @@
+name: Docs
+
+# Builds the documentation site in docs/ with VitePress, and publishes it to GitHub Pages
+# (https://gregoryduckworth.github.io/homepage-traefik/) from main. Pull requests only build it, so a broken page or a
+# link to a page that doesn't exist fails before it's merged.
+on:
+  push:
+    branches: [main]
+    paths:
+      - docs/**
+      - package.json
+      - package-lock.json
+      - .nvmrc
+      - .github/workflows/docs.yml
+  pull_request:
+    branches: [main]
+    paths:
+      - docs/**
+      - package.json
+      - package-lock.json
+      - .nvmrc
+      - .github/workflows/docs.yml
+  # To publish the site again by hand.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A new push to a pull request cancels the build it replaces. Publishing runs one at a time and always finishes, so
+# the site never ends up older than main.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm run docs:build
+      - uses: actions/upload-pages-artifact@v5
+        if: github.event_name != 'pull_request'
+        with:
+          path: docs/.vitepress/dist
+
+  deploy:
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      # To prove to GitHub Pages that the artifact came from this workflow.
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/deploy-pages@v5
+        id: deployment
