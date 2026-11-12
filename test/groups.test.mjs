@@ -1,6 +1,8 @@
 // The page's group logic. It runs in the browser, but needs nothing from it.
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+// Lets the saves already settled by hand run on to their next step.
+import { setImmediate as settle } from 'node:timers/promises';
 import { createGroups, groupOf, withGroupMoved, withGroupShifted, withRouteMoved, withRouteShifted } from '../public/groups.js';
 
 const GROUPS = [
@@ -109,12 +111,19 @@ describe('withGroupShifted', () => {
   }
 });
 
-// A server whose replies the test settles by hand, one save at a time, in any order.
+// A server whose replies the test settles by hand, one save at a time. Each save it confirms gets the next version,
+// v1, v2 and so on; `resolve` can instead give the groups as the server saved them.
 function fakeServer() {
   const pending = [];
+  let saves = 0;
   return {
     pending,
-    put: groups => new Promise((resolve, reject) => pending.push({ groups, resolve: () => resolve(groups), reject })),
+    put: (groups, version) => new Promise((resolve, reject) => pending.push({
+      groups,
+      version,
+      resolve: (saved = groups) => resolve({ groups: saved, version: `v${++saves}` }),
+      reject,
+    })),
   };
 }
 
@@ -124,8 +133,10 @@ function groupsWith(server, { reload = async () => {} } = {}) {
   return { groups, renders };
 }
 
+
 const ONE = [{ name: 'Media', routes: [] }];
 const TWO = [{ name: 'Media', routes: [] }, { name: 'Tools', routes: [] }];
+const THREE = [...TWO, { name: 'Home', routes: [] }];
 
 describe('createGroups save', () => {
   it('shows a change before the server has it', () => {
@@ -144,11 +155,64 @@ describe('createGroups save', () => {
     assert.deepEqual(groups.list, ONE);
   });
 
+  it('shows the groups as the server saved them', async () => {
+    const server = fakeServer();
+    const { groups } = groupsWith(server);
+    const saved = groups.save([{ name: ' Media ', routes: [] }]);
+    server.pending[0].resolve(ONE);
+    await saved;
+    assert.deepEqual(groups.list, ONE);
+  });
+
   it('does not send a change that leaves the groups as they are', async () => {
     const server = fakeServer();
     const { groups } = groupsWith(server);
     await groups.save([]);
     assert.equal(server.pending.length, 0);
+  });
+
+  it('sends the version of the groups it loaded with a change to them', () => {
+    const server = fakeServer();
+    const { groups } = groupsWith(server);
+    groups.startLoad()(ONE, 'v0');
+    groups.save(TWO);
+    assert.equal(server.pending[0].version, 'v0');
+  });
+
+  it('sends the version the server gave the last save with the next change', async () => {
+    const server = fakeServer();
+    const { groups } = groupsWith(server);
+    const first = groups.save(ONE);
+    server.pending[0].resolve();
+    await first;
+    groups.save(TWO);
+    assert.equal(server.pending[1].version, 'v1');
+  });
+
+  it('waits for a save to come back before sending a change made meanwhile, with the version it saved', async () => {
+    const server = fakeServer();
+    const { groups } = groupsWith(server);
+    const first = groups.save(ONE);
+    const second = groups.save(TWO);
+    assert.equal(server.pending.length, 1);
+    server.pending[0].resolve();
+    await settle();
+    assert.deepEqual(groups.list, TWO);
+    assert.deepEqual(server.pending.map(save => save.version), [null, 'v1']);
+    server.pending[1].resolve();
+    await Promise.all([first, second]);
+    assert.deepEqual(groups.list, TWO);
+  });
+
+  it('sends only the latest of several changes made while a save was out', async () => {
+    const server = fakeServer();
+    const { groups } = groupsWith(server);
+    const saves = [groups.save(ONE), groups.save(TWO), groups.save(THREE)];
+    server.pending[0].resolve();
+    await settle();
+    assert.deepEqual(server.pending.map(save => save.groups), [ONE, THREE]);
+    server.pending[1].resolve();
+    await Promise.all(saves);
   });
 
   it('goes back to the groups the server last confirmed when it refuses a change', async () => {
@@ -167,54 +231,45 @@ describe('createGroups save', () => {
     const server = fakeServer();
     const { groups } = groupsWith(server);
     const saved = groups.save(ONE);
-    server.pending[0].reject(new Error('disk full'));
+    server.pending[0].reject(new Error('The groups were changed somewhere else'));
     await saved;
-    assert.equal(groups.error, 'disk full');
+    assert.equal(groups.error, 'The groups were changed somewhere else');
   });
 
-  it('reloads the groups when a change is refused', async () => {
+  it('reloads the groups when a change is refused, and shows what the reload brings back', async () => {
     const server = fakeServer();
     let reloads = 0;
-    const { groups } = groupsWith(server, { reload: async () => { reloads++; } });
+    const { groups } = groupsWith(server, {
+      reload: async () => {
+        reloads++;
+        groups.startLoad()(THREE, 'v9');
+      },
+    });
     const saved = groups.save(ONE);
-    server.pending[0].reject(new Error('disk full'));
+    server.pending[0].reject(new Error('changed elsewhere'));
     await saved;
     assert.equal(reloads, 1);
+    assert.deepEqual(groups.list, THREE);
   });
 
-  it('keeps a newer change when an earlier save finishes first', async () => {
+  it('drops a change made on top of one the server refused, without sending it', async () => {
     const server = fakeServer();
     const { groups } = groupsWith(server);
     const first = groups.save(ONE);
     const second = groups.save(TWO);
-    server.pending[0].resolve();
-    await first;
-    assert.deepEqual(groups.list, TWO);
-    server.pending[1].resolve();
-    await second;
+    server.pending[0].reject(new Error('changed elsewhere'));
+    await Promise.all([first, second]);
+    assert.equal(server.pending.length, 1);
+    assert.deepEqual(groups.list, []);
   });
 
-  it('does not undo a newer change that is still saving when an earlier save is refused', async () => {
+  it('clears the error when the next change is made', async () => {
     const server = fakeServer();
     const { groups } = groupsWith(server);
     const first = groups.save(ONE);
-    const second = groups.save(TWO);
     server.pending[0].reject(new Error('disk full'));
     await first;
-    assert.deepEqual(groups.list, TWO);
-    server.pending[1].resolve();
-    await second;
-  });
-
-  it('clears an earlier error once a later save has everything', async () => {
-    const server = fakeServer();
-    const { groups } = groupsWith(server);
-    const first = groups.save(ONE);
-    const second = groups.save(TWO);
-    server.pending[0].reject(new Error('disk full'));
-    await first;
-    server.pending[1].resolve();
-    await second;
+    groups.save(TWO);
     assert.equal(groups.error, null);
   });
 });
@@ -234,8 +289,10 @@ describe('createGroups startLoad', () => {
     const saved = groups.save(TWO);
     server.pending[0].resolve();
     await saved;
-    apply(ONE);
+    apply(ONE, 'v0');
     assert.deepEqual(groups.list, TWO);
+    groups.save(THREE);
+    assert.equal(server.pending[1].version, 'v1');
   });
 
   it('ignores a load that comes back while a change is saving', () => {

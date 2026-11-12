@@ -63,6 +63,26 @@ test('a route dragged onto a group joins it', async ({ page, homepage }) => {
   await expect.poll(async () => (await homepage.readConfig()).groups).toEqual([{ name: 'Monitoring', routes: ['grafana@docker'] }]);
 });
 
+test('a group change made on a page that missed a change saved elsewhere is refused, and the page catches up', async ({ page, homepage }) => {
+  await createGroup(page, 'Media');
+  // The page stops hearing about changes saved elsewhere, as when its event stream is down.
+  await page.route('**/api/events', route => route.abort());
+  await page.reload();
+  await expect(group(page, 'Media')).toBeVisible();
+  await page.request.put(`${homepage.url}api/groups`, { data: { groups: [{ name: 'Media', routes: ['jellyfin@docker'] }] } });
+
+  await page.getByRole('button', { name: 'Rename Media' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Rename group' });
+  await dialog.getByLabel('Name').fill('Films');
+  await dialog.getByRole('button', { name: 'Rename group' }).click();
+
+  await expect(page.getByText('Your group change wasn’t saved')).toBeVisible();
+  await expect(page.getByText(/changed somewhere else/)).toBeVisible();
+  await expect(details(group(page, 'Media'), 'jellyfin')).toBeVisible();
+  await expect(group(page, 'Films')).toHaveCount(0);
+  expect((await homepage.readConfig()).groups).toEqual([{ name: 'Media', routes: ['jellyfin@docker'] }]);
+});
+
 test('groups can be reordered with their arrow buttons', async ({ page }) => {
   await createGroup(page, 'First');
   await createGroup(page, 'Second');

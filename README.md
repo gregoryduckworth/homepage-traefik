@@ -226,8 +226,8 @@ Docker keeps container logs on disk, so a size limit such as `logging: { driver:
 
 | Endpoint                        | Description                                                                                                    |
 | ------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `GET /api/routes`               | Routes with their health, saved settings (`custom`) and found icon, plus your groups and the image's `version` |
-| `PUT /api/groups`               | Replace the groups: `{"groups": [...]}`                                                                        |
+| `GET /api/routes`               | Routes with their health, saved settings (`custom`) and found icon, plus your groups, their `groupsVersion` and the image's `version` |
+| `PUT /api/groups`               | Replace the groups: `{"groups": [...]}`. Replies with them and their new `groupsVersion`. Send `If-Match: "<groupsVersion>"` to have the change refused with a `409`, and the groups as they are now, if they've changed since |
 | `PUT /api/routes/<router name>` | Set any of `{"name": "...", "icon": "...", "hidden": true}`. Empty or `false` clears; omitted fields are kept |
 | `GET /api/icons/<router name>`  | The icon found on the route's site                                                                             |
 | `POST /api/check/<router name>` | Check the route and look up its icon now. Replies with its new `health` once both are done                     |
@@ -235,6 +235,8 @@ Docker keeps container logs on disk, so a size limit such as `logging: { driver:
 | `GET /healthz`                  | Liveness check                                                                                                 |
 
 `PUT` bodies, and `POST` requests, are sent as `application/json`.
+
+The page sends `If-Match` with every group change, so a change made on a page that missed one saved elsewhere, say because its connection dropped, doesn't silently undo it. The page says the change wasn't saved and shows the groups as they are now. `groupsVersion` only changes when the groups do: renaming, hiding or giving an icon to a route leaves it alone.
 
 ## Development
 

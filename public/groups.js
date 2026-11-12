@@ -51,58 +51,68 @@ export function withGroupShifted(groups, name, step) {
 }
 
 // Saving is optimistic: `groups` changes at once and `onChange` is told, so the page shows the change straight
-// away. `put` sends the groups to the server and resolves to the groups it saved. If the server refuses a change, the
-// groups go back to those it last confirmed and `reload` fetches them afresh, which stays correct even when several
-// saves were in flight.
+// away. `put(groups, version)` sends the groups to the server along with the version of the groups they were made
+// to, and resolves to { groups, version } as it saved them. The server refuses a change made to groups that have
+// since changed elsewhere, rather than undo that change. If it refuses a change for that or any other reason, the
+// groups go back to those it last confirmed and `reload` fetches them afresh.
 export function createGroups({ put, onChange, reload }) {
   let groups = [];
-  // The groups the server last reported, which the page falls back to when a save fails.
+  // The groups the server last reported, which the page falls back to when a save fails, and their version.
   let confirmed = [];
-  let saving = 0;
+  let version = null;
+  // The save under way, if any, and whether the page has changed the groups since it was sent.
+  let sending = null;
+  let unsent = false;
   // Bumped on every change, so a load that started before it can't undo it.
   let edits = 0;
   let error = null;
+
+  // Sends the page's groups, and then any change made while that was out, until the server has them all. Saves go
+  // one at a time because each carries the version of the groups it was made to, which only the previous one's reply
+  // says. Resolves to whether every change was saved; once one is refused, the changes made on top of it are dropped.
+  async function send() {
+    try {
+      while (unsent) {
+        unsent = false;
+        const saved = await put(groups, version);
+        confirmed = saved.groups;
+        version = saved.version;
+        // A change made while this save was out stays on the page until it's sent too.
+        if (!unsent) groups = saved.groups;
+      }
+      return true;
+    } catch (err) {
+      unsent = false;
+      error = err.message;
+      groups = confirmed;
+      return false;
+    }
+  }
 
   async function save(next) {
     if (JSON.stringify(next) === JSON.stringify(groups)) return;
     groups = next;
     error = null;
-    saving++;
     edits++;
+    unsent = true;
     onChange();
-    let failed = false;
-    try {
-      const saved = await put(next);
-      confirmed = saved;
-      // A later save still in flight holds newer groups than this response. Once none is, the server has every
-      // change made on the page, including any whose own save failed, so an earlier error no longer applies.
-      if (saving === 1) {
-        groups = saved;
-        error = null;
-      }
-    } catch (err) {
-      failed = true;
-      error = err.message;
-    } finally {
-      saving--;
-    }
-    // A save still in flight settles the groups itself when it finishes.
-    if (failed && !saving) {
-      groups = confirmed;
-      await reload();
-    } else {
-      onChange();
-    }
+    sending ??= send().then(async saved => {
+      sending = null;
+      if (saved) onChange();
+      else await reload();
+    });
+    await sending;
   }
 
-  // Call as a load of the groups from the server starts. It returns a function to call with the groups it loaded,
-  // which keeps the page's own groups instead if they changed while the request was out: the response may predate
-  // the change.
+  // Call as a load of the groups from the server starts. It returns a function to call with the groups it loaded and
+  // their version, which keeps the page's own groups instead if they changed while the request was out: the response
+  // may predate the change.
   function startLoad() {
     const editsBefore = edits;
-    return loaded => {
-      if (saving || edits !== editsBefore) return;
+    return (loaded, loadedVersion = null) => {
+      if (sending || edits !== editsBefore) return;
       confirmed = loaded;
+      version = loadedVersion;
       groups = loaded;
     };
   }
