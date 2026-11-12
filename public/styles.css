@@ -561,6 +561,16 @@ a.tile-link:hover .tile-name { color: var(--accent); }
   color: var(--muted);
 }
 
+.details-order {
+  display: flex;
+  gap: 0.5rem;
+  margin: -0.25rem 1.25rem 1rem;
+}
+
+.details-order[hidden] { display: none; }
+.details-order button { flex: 1; }
+.details-order button:disabled { color: var(--muted); opacity: 0.5; cursor: default; }
+
 .details-edit {
   display: block;
   width: calc(100% - 2.5rem);

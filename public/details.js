@@ -1,17 +1,23 @@
-// A route's details panel, from which it can be checked, moved to a group, hidden or shown, and given its own name
-// and icon in a dialog of its own.
+// A route's details panel, from which it can be checked, moved to a group or up and down within one, hidden or shown,
+// and given its own name and icon in a dialog of its own.
 import { post, putJson } from './api.js';
 import { $, el, closeOnBackdrop } from './dom.js';
 import { groupOf } from './groups.js';
 import { addressOf, detailRows, displayName, isHidden, statusOf } from './routes.js';
 
 // `routeOf` finds a route the page lists by id, and `groups` returns the custom groups. `moveRoute` puts a route in
-// a group, or in none. `showingHidden` says whether hidden routes are on the page. `render` shows a change made here
-// straight away, and `load` fetches everything afresh once the server has it.
-export function createDetails({ routeOf, groups, moveRoute, showingHidden, render, load }) {
+// a group, or in none. `placeOf` returns the custom group a route is in and the ids of the routes the page lists in
+// it, in order, as { group, listed }, or null for a route in no group. `shiftRoute` moves a route one place up (-1)
+// or down (1) in its group. `showingHidden` says whether hidden routes are on the page. `render` shows a change made
+// here straight away, and `load` fetches everything afresh once the server has it.
+export function createDetails({ routeOf, groups, moveRoute, placeOf, shiftRoute, showingHidden, render, load }) {
   const els = {
     details: $('details'),
     group: $('details-group'),
+    order: $('details-order'),
+    up: $('details-up'),
+    down: $('details-down'),
+    moved: $('details-moved'),
     check: $('details-check'),
     checkError: $('details-check-error'),
     hide: $('details-hide'),
@@ -54,6 +60,13 @@ export function createDetails({ routeOf, groups, moveRoute, showingHidden, rende
     els.group.value = current ? current.name : '';
     els.group.parentElement.hidden = !groups().length;
 
+    // Routes in no group are listed by name, so only those in a group, with others beside them, can be moved.
+    const place = placeOf(route.id);
+    const index = place ? place.listed.indexOf(route.id) : -1;
+    els.order.hidden = index < 0 || place.listed.length < 2;
+    els.up.disabled = index <= 0;
+    els.down.disabled = index < 0 || index === place.listed.length - 1;
+
     els.hide.textContent = isHidden(route) ? 'Show route' : 'Hide route';
 
     // Only routes the server checks can be checked now: disabled routes and those with no web address never are.
@@ -80,6 +93,7 @@ export function createDetails({ routeOf, groups, moveRoute, showingHidden, rende
     if (!route) return;
     detailsId = id;
     if (checkError?.id !== id) checkError = null;
+    els.moved.textContent = '';
     fill(route);
     els.details.showModal();
   }
@@ -100,6 +114,21 @@ export function createDetails({ routeOf, groups, moveRoute, showingHidden, rende
   }
 
   els.group.addEventListener('change', () => moveRoute(detailsId, els.group.value || null));
+
+  // The page, and so this panel, updates as soon as the route moves. Focus stays on the button pressed, unless the
+  // route reached the top or bottom and the button is now disabled; then it goes to the other one.
+  function shift(step) {
+    const id = detailsId;
+    shiftRoute(id, step);
+    const place = placeOf(id);
+    const index = place ? place.listed.indexOf(id) : -1;
+    if (index >= 0) els.moved.textContent = `Moved to ${index + 1} of ${place.listed.length} in ${place.group}`;
+    const [pressed, other] = step < 0 ? [els.up, els.down] : [els.down, els.up];
+    if (pressed.disabled) other.focus();
+  }
+
+  els.up.addEventListener('click', () => shift(-1));
+  els.down.addEventListener('click', () => shift(1));
 
   // Checks the route and looks up its icon straight away, rather than when they're next due. The server answers
   // once both are done, and the page then shows what they found.

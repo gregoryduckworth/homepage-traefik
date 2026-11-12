@@ -163,7 +163,7 @@ The file is in PEM format, starting with `-----BEGIN CERTIFICATE-----`, and can 
 
 - **Names and icons:** open a route's details and select **Change name or icon**. An icon is any `http://` or `https://` image address, for example from [Dashboard Icons](https://github.com/homarr-labs/dashboard-icons). Without one, the homepage uses the site's own icon (its SVG icon, `apple-touch-icon` or favicon, looked up from the server), or else the name's first letter.
 - **Hiding:** select **Hide route** in its details. Hidden routes are left off the page and the status strip. **Show hidden routes** brings them back into view.
-- **Groups:** select **New group**, then drag routes onto it. Reorder routes and groups by dragging them, or use the arrow buttons. You can also pick a group from the **Group** menu in a route's details, which works with a keyboard and on phones. Deleting a group sends its routes back to their entry point groups.
+- **Groups:** select **New group**, then drag routes onto it, or pick it from the **Group** menu in a route's details. Reorder groups by dragging their headings or with the arrow buttons beside their names, and routes within a group by dragging them or with **Move up** and **Move down** in their details. The menu and buttons work with a keyboard and on phones. Routes in no group are listed by name. Deleting a group sends its routes back to their entry point groups.
 - Press `/` to search by name, address, service or rule. The page has light and dark themes, and updates by itself when anything changes.
 
 Anyone who can open the homepage can change these settings. Put authentication middleware in front of it in Traefik if that matters to you.
