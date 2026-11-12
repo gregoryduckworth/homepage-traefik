@@ -2,7 +2,7 @@ const js = require('@eslint/js');
 const globals = require('globals');
 
 module.exports = [
-  { ignores: ['playwright-report/', 'test-results/'] },
+  { ignores: ['playwright-report/', 'test-results/', 'docs/.vitepress/cache/', 'docs/.vitepress/dist/'] },
   js.configs.recommended,
   {
     rules: {
