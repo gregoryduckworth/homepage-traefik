@@ -188,3 +188,52 @@ describe('createRouteStore health checks', () => {
     assert.equal(await store.refreshHealth(), false);
   });
 });
+
+describe('createRouteStore credentials', () => {
+  const BASIC = `Basic ${Buffer.from('admin:s3cret').toString('base64')}`;
+  const sources = [
+    ['in the URL', { traefikUrl: 'http://admin:s3cret@traefik:8080' }],
+    ['as auth', { traefikUrl: 'http://traefik:8080', auth: { username: 'admin', password: 's3cret' } }],
+  ];
+  // What Traefik does with the request: each either answers or throws as fetch would.
+  const outcomes = [
+    ['answers', async url => routersResponse(url, [{ name: 'app@docker', rule: 'Host(`app.test`)' }])],
+    ['cannot be reached', async () => { throw Object.assign(new Error('fetch failed'), { cause: { code: 'ECONNREFUSED' } }); }],
+    ['times out', async () => { throw Object.assign(new Error('aborted'), { name: 'TimeoutError' }); }],
+    ['refuses the credentials', async () => ({ ok: false, status: 401, headers: new Headers() })],
+    ['answers with something unexpected', async () => jsonResponse({ message: 'nope' })],
+  ];
+
+  for (const [source, options] of sources) {
+    it(`sends credentials given ${source} as basic auth to a URL without them`, async () => {
+      const requests = [];
+      const fetchImpl = async (url, init) => {
+        requests.push({ url: url.href, authorization: init.headers.Authorization });
+        return routersResponse(url, []);
+      };
+      await createRouteStore({ ...options, fetchImpl }).refresh();
+      assert.deepEqual(requests, [
+        { url: 'http://traefik:8080/api/http/routers?page=1&per_page=100', authorization: BASIC },
+        { url: 'http://traefik:8080/api/tcp/routers?page=1&per_page=100', authorization: BASIC },
+      ]);
+    });
+
+    for (const [outcome, fetchImpl] of outcomes) {
+      it(`keeps a password given ${source} out of the error and logs when Traefik ${outcome}`, async t => {
+        t.mock.method(console, 'error', () => {});
+        const store = createRouteStore({ ...options, fetchImpl });
+        await store.refresh();
+        const logged = console.error.mock.calls.map(call => call.arguments.join(' ')).join('\n');
+        assert.doesNotMatch(`${store.state.error}\n${logged}`, /s3cret/);
+      });
+    }
+  }
+
+  it('names the Traefik API without the credentials when they are refused', async t => {
+    t.mock.method(console, 'error', () => {});
+    const fetchImpl = async () => ({ ok: false, status: 401, headers: new Headers() });
+    const store = createRouteStore({ traefikUrl: 'http://admin:s3cret@traefik:8080', fetchImpl });
+    await store.refresh();
+    assert.equal(store.state.error, 'The Traefik API at http://traefik:8080 refused the username and password (HTTP 401)');
+  });
+});

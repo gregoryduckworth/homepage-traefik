@@ -1,6 +1,7 @@
 const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
+const http = require('node:http');
 const fs = require('node:fs/promises');
 const net = require('node:net');
 const { once } = require('node:events');
@@ -436,5 +437,59 @@ describe('starting on a port that is in use', () => {
 
     assert.equal(code, 1);
     assert.equal(stderr.trim(), `Port ${port} is already in use. Stop whatever is using it, or set PORT to another port.`);
+  });
+});
+
+describe('a Traefik API behind basic auth', () => {
+  const outcomes = [
+    ['answers', async url => routersResponse(url, [{ name: 'app@docker', rule: 'Host(`app.test`)' }])],
+    ['refuses the credentials', async () => ({ ok: false, status: 401, headers: new Headers() })],
+    ['times out', async () => { throw Object.assign(new Error('aborted'), { name: 'TimeoutError' }); }],
+  ];
+  for (const [outcome, fetchImpl] of outcomes) {
+    it(`keeps the password out of GET /api/routes when Traefik ${outcome}`, async t => {
+      t.mock.method(console, 'error', () => {});
+      const store = createRouteStore({ traefikUrl: 'http://admin:s3cret@traefik:8080', fetchImpl });
+      await store.refresh();
+      const config = { read: async () => ({ groups: [], routes: {}, error: null }) };
+      const server = createServer({ store, config, title: 't' });
+      await new Promise(resolve => server.listen(0, resolve));
+      t.after(() => server.close());
+      const body = await (await fetch(`http://127.0.0.1:${server.address().port}/api/routes`)).text();
+      assert.doesNotMatch(body, /s3cret/);
+    });
+  }
+
+  it('reads routes with the credentials from the environment and never logs the password', { timeout: 10000 }, async t => {
+    const authorization = `Basic ${Buffer.from('admin:s3cret').toString('base64')}`;
+    const requests = [];
+    const traefik = http.createServer((req, res) => {
+      requests.push(req.headers.authorization);
+      res.writeHead(401).end();
+    });
+    await new Promise(resolve => traefik.listen(0, '127.0.0.1', resolve));
+    const free = net.createServer();
+    await new Promise(resolve => free.listen(0, resolve));
+    const { port } = free.address();
+    await new Promise(resolve => free.close(resolve));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'homepage-auth-'));
+    t.after(async () => {
+      traefik.close();
+      await fs.rm(dir, { recursive: true, force: true });
+    });
+
+    const child = spawn(process.execPath, [path.join(__dirname, '..', 'src', 'server.js')], {
+      env: { ...process.env, PORT: String(port), TRAEFIK_API_URL: `http://admin:s3cret@127.0.0.1:${traefik.address().port}`, CONFIG_FILE: path.join(dir, 'homepage.json') },
+    });
+    t.after(() => child.kill());
+    let output = '';
+    child.stdout.on('data', chunk => { output += chunk; });
+    child.stderr.on('data', chunk => { output += chunk; });
+    while (!output.includes('Route refresh failed')) await once(child.stderr, 'data');
+
+    assert.match(output, new RegExp(`reading routes from http://127\\.0\\.0\\.1:${traefik.address().port} as admin`));
+    assert.match(output, /refused the username and password \(HTTP 401\)/);
+    assert.doesNotMatch(output, /s3cret/);
+    assert.equal(requests[0], authorization);
   });
 });

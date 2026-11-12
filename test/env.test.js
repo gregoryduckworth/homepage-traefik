@@ -1,7 +1,7 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
-const { readSettings, readSeconds, readPort, readFrameAncestors } = require('../src/env');
+const { readSettings, readSeconds, readPort, readFrameAncestors, readTraefikApi } = require('../src/env');
 
 describe('readSeconds', () => {
   const opts = { fallback: 30, min: 5 };
@@ -53,6 +53,39 @@ describe('readFrameAncestors', () => {
   }
 });
 
+describe('readTraefikApi', () => {
+  // Stands in for the filesystem: only /run/secrets/traefik exists.
+  const readFile = file => {
+    if (file === '/run/secrets/traefik') return 'from-file\n';
+    throw Object.assign(new Error('no such file'), { code: 'ENOENT' });
+  };
+  const admin = password => ({ username: 'admin', password });
+  const cases = [
+    ['sends no credentials when none are set', {}, { traefikUrl: 'http://traefik:8080', traefikAuth: null }],
+    ['takes them out of the URL', { TRAEFIK_API_URL: 'http://admin:s3cret@proxy:8080' }, { traefikUrl: 'http://proxy:8080', traefikAuth: admin('s3cret') }],
+    ['reads them from their variables', { TRAEFIK_API_USERNAME: 'admin', TRAEFIK_API_PASSWORD: 's3cret' }, { traefikUrl: 'http://traefik:8080', traefikAuth: admin('s3cret') }],
+    ['prefers the variables to the URL', { TRAEFIK_API_URL: 'http://old:old@proxy:8080', TRAEFIK_API_USERNAME: 'admin', TRAEFIK_API_PASSWORD: 's3cret' }, { traefikUrl: 'http://proxy:8080', traefikAuth: admin('s3cret') }],
+    ['reads the password from a file without its line break', { TRAEFIK_API_USERNAME: 'admin', TRAEFIK_API_PASSWORD_FILE: '/run/secrets/traefik' }, { traefikUrl: 'http://traefik:8080', traefikAuth: admin('from-file') }],
+    ['prefers the password file to the password variable', { TRAEFIK_API_USERNAME: 'admin', TRAEFIK_API_PASSWORD: 's3cret', TRAEFIK_API_PASSWORD_FILE: '/run/secrets/traefik' }, { traefikUrl: 'http://traefik:8080', traefikAuth: admin('from-file') }],
+    ['sends no password when the password file cannot be read', { TRAEFIK_API_USERNAME: 'admin', TRAEFIK_API_PASSWORD_FILE: '/missing' }, { traefikUrl: 'http://traefik:8080', traefikAuth: admin('') }],
+    ['sends nothing for a password without a username', { TRAEFIK_API_PASSWORD: 's3cret' }, { traefikUrl: 'http://traefik:8080', traefikAuth: null }],
+  ];
+  for (const [name, env, expected] of cases) {
+    it(name, t => {
+      t.mock.method(console, 'warn', () => {});
+      assert.deepEqual(readTraefikApi(env, { readFile }), expected);
+    });
+  }
+
+  it('warns about a password file it cannot read without showing the password', t => {
+    t.mock.method(console, 'warn', () => {});
+    readTraefikApi({ TRAEFIK_API_USERNAME: 'admin', TRAEFIK_API_PASSWORD: 's3cret', TRAEFIK_API_PASSWORD_FILE: '/missing' }, { readFile });
+    const warnings = console.warn.mock.calls.map(call => call.arguments[0]).join('\n');
+    assert.match(warnings, /Can't read TRAEFIK_API_PASSWORD_FILE=\/missing \(ENOENT\)/);
+    assert.doesNotMatch(warnings, /s3cret/);
+  });
+});
+
 describe('readSettings', () => {
   it('uses the defaults when nothing is set', () => {
     const settings = readSettings({});
@@ -60,6 +93,7 @@ describe('readSettings', () => {
       port: 3000,
       frameAncestors: "'self'",
       traefikUrl: 'http://traefik:8080',
+      traefikAuth: null,
       pollSeconds: 30,
       healthSeconds: 60,
       title: 'Routes',
@@ -88,6 +122,7 @@ describe('readSettings', () => {
       port: 8080,
       frameAncestors: 'https://dash.test',
       traefikUrl: 'http://proxy:8080',
+      traefikAuth: null,
       pollSeconds: 15,
       healthSeconds: 120,
       title: 'My lab',

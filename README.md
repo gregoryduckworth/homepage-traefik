@@ -23,7 +23,7 @@ Open <http://home.localhost>. You should see `home.localhost` and `whoami.localh
 
 ## Adding it to an existing Traefik
 
-1. Enable the Traefik API, either with `--api.insecure=true` (serves it on port 8080 inside the Docker network) or with `--api=true` and a router for `api@internal` that the homepage can reach without authentication.
+1. Enable the Traefik API, either with `--api.insecure=true` (serves it on port 8080 inside the Docker network) or with `--api=true` and a router for `api@internal` that the homepage can reach. That router can use a `basicAuth` middleware: see [A Traefik API behind basic auth](#a-traefik-api-behind-basic-auth).
 2. Run the homepage on the same Docker network as Traefik, using the pre-built image for `amd64` and `arm64`:
 
 ```yaml
@@ -40,6 +40,28 @@ services:
       - traefik.http.routers.homepage.rule=Host(`home.example.com`)
       - traefik.http.services.homepage.loadbalancer.server.port=3000
 ```
+
+### A Traefik API behind basic auth
+
+If the router for `api@internal` uses a `basicAuth` middleware, give the homepage a username and password for it. They're sent as an `Authorization: Basic` header, and are never shown on the page or written to the logs. Set `TRAEFIK_API_USERNAME` and `TRAEFIK_API_PASSWORD`, or put them in the URL (`http://admin:s3cret@traefik:8080`, percent-encoding any `@`, `:` or `/` in them). To keep the password out of the compose file, read it from a Docker secret with `TRAEFIK_API_PASSWORD_FILE`:
+
+```yaml
+services:
+  homepage:
+    image: ghcr.io/gregoryduckworth/homepage-traefik:latest
+    environment:
+      TRAEFIK_API_URL: https://traefik.example.com
+      TRAEFIK_API_USERNAME: homepage
+      TRAEFIK_API_PASSWORD_FILE: /run/secrets/traefik_api_password
+    secrets:
+      - traefik_api_password
+
+secrets:
+  traefik_api_password:
+    file: ./traefik_api_password.txt
+```
+
+The variables take the place of any username and password in the URL, and `TRAEFIK_API_PASSWORD_FILE` of `TRAEFIK_API_PASSWORD`. If Traefik answers with a 401 or 403, the notice at the top of the page says the username and password were refused.
 
 Which image tag to use:
 
@@ -95,6 +117,9 @@ How a router is shown:
 | Variable                       | Default                | Description                                                                                         |
 | ------------------------------ | ---------------------- | --------------------------------------------------------------------------------------------------- |
 | `TRAEFIK_API_URL`              | `http://traefik:8080`  | Base URL of the Traefik API                                                                         |
+| `TRAEFIK_API_USERNAME`         | (unset)                | Username for a Traefik API behind basic auth (see [above](#a-traefik-api-behind-basic-auth))        |
+| `TRAEFIK_API_PASSWORD`         | (unset)                | Password for a Traefik API behind basic auth                                                        |
+| `TRAEFIK_API_PASSWORD_FILE`    | (unset)                | File to read that password from instead, such as a Docker secret                                    |
 | `HOMEPAGE_TITLE`               | `Routes`               | Heading and browser tab title                                                                       |
 | `POLL_INTERVAL_SECONDS`        | `30`                   | How often routes are read from Traefik (at least 5)                                                 |
 | `HEALTHCHECK_INTERVAL_SECONDS` | `60`                   | How often each route is checked (at least 10)                                                       |

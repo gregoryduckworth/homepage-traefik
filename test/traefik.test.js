@@ -1,6 +1,6 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
-const { parseRule, parseEntryPointPorts, normalizeRouter, normalizeTcpRouter, normalizeRouters, fetchRouters } = require('../src/traefik');
+const { parseRule, parseEntryPointPorts, normalizeRouter, normalizeTcpRouter, normalizeRouters, splitApiUrl, fetchRouters } = require('../src/traefik');
 
 describe('parseRule', () => {
   it('extracts host and path prefix', () => {
@@ -223,6 +223,24 @@ function fakeResponse(body, { status = 200, nextPage } = {}) {
   };
 }
 
+describe('splitApiUrl', () => {
+  const cases = [
+    ['leaves a URL without credentials as it is', 'http://traefik:8080', { url: 'http://traefik:8080', auth: null }],
+    ['takes the username and password out of the URL', 'http://admin:s3cret@traefik:8080', { url: 'http://traefik:8080', auth: { username: 'admin', password: 's3cret' } }],
+    ['keeps the rest of the URL', 'https://admin:s3cret@proxy.test/traefik/', { url: 'https://proxy.test/traefik/', auth: { username: 'admin', password: 's3cret' } }],
+    ['decodes percent-encoded characters', 'http://ad%20min:s%40cret@traefik:8080', { url: 'http://traefik:8080', auth: { username: 'ad min', password: 's@cret' } }],
+    ['takes a username without a password', 'http://admin@traefik:8080', { url: 'http://traefik:8080', auth: { username: 'admin', password: '' } }],
+    ['still hides the credentials of a URL it cannot parse', 'http://admin:s3cret@traefik:99999', { url: 'http://traefik:99999', auth: null }],
+    ['hides a password with a slash in a URL it cannot parse', 'http://admin:s3/cret@traefik:8080', { url: 'http://traefik:8080', auth: null }],
+    ['hides the credentials of a URL without its scheme', 'admin:s3cret@traefik:8080', { url: 'traefik:8080', auth: null }],
+  ];
+  for (const [name, raw, expected] of cases) {
+    it(name, () => {
+      assert.deepEqual(splitApiUrl(raw), expected);
+    });
+  }
+});
+
 describe('fetchRouters', () => {
   it('requests the routers endpoint and follows pagination', async () => {
     const calls = [];
@@ -253,6 +271,41 @@ describe('fetchRouters', () => {
     const fetchImpl = async () => fakeResponse(null, { status: 404 });
     await assert.rejects(fetchRouters('http://traefik:8080', { fetchImpl }), /HTTP 404/);
   });
+
+  it('sends the username and password as basic auth', async () => {
+    let headers;
+    const fetchImpl = async (url, init) => {
+      headers = init.headers;
+      return fakeResponse([]);
+    };
+    await fetchRouters('http://traefik:8080', { fetchImpl, auth: { username: 'admin', password: 'pässword' } });
+    assert.equal(headers.Authorization, `Basic ${Buffer.from('admin:pässword', 'utf8').toString('base64')}`);
+  });
+
+  it('sends no Authorization header without a username and password', async () => {
+    let headers;
+    const fetchImpl = async (url, init) => {
+      headers = init.headers;
+      return fakeResponse([]);
+    };
+    await fetchRouters('http://traefik:8080', { fetchImpl });
+    assert.equal(headers.Authorization, undefined);
+  });
+
+  for (const status of [401, 403]) {
+    it(`says the username and password were refused on HTTP ${status}`, async () => {
+      const fetchImpl = async () => fakeResponse(null, { status });
+      await assert.rejects(
+        fetchRouters('http://traefik:8080', { fetchImpl, auth: { username: 'admin', password: 's3cret' } }),
+        { message: `The Traefik API at http://traefik:8080 refused the username and password (HTTP ${status})` },
+      );
+    });
+
+    it(`says to set a username and password on HTTP ${status} when none was sent`, async () => {
+      const fetchImpl = async () => fakeResponse(null, { status });
+      await assert.rejects(fetchRouters('http://traefik:8080', { fetchImpl }), /asks for a username and password .* Set TRAEFIK_API_USERNAME and TRAEFIK_API_PASSWORD/);
+    });
+  }
 
   it('throws when the body is not an array', async () => {
     const fetchImpl = async () => fakeResponse({ message: 'nope' });
