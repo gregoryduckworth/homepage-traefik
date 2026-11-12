@@ -232,14 +232,14 @@ function shutDown({ server, events = null, graceMs = 1000 }) {
 
 // Starts the homepage as `env` sets it up: serves the page, and polls Traefik until it's stopped.
 async function main(env) {
-  const { port, frameAncestors, traefikUrl, pollSeconds, healthSeconds, title, version, entryPointPorts, configFile, healthOptions } = readSettings(env);
+  const { port, frameAncestors, traefikUrl, traefikAuth, pollSeconds, healthSeconds, title, version, entryPointPorts, configFile, healthOptions } = readSettings(env);
   // Icons found on the sites are saved beside the config file, so a restart shows them straight away.
   const iconsFile = path.join(path.dirname(configFile), 'icons.json');
   const config = createConfigStore({ file: configFile });
   const events = createEvents();
   const savedIcons = await readCache(iconsFile, parseSavedIcons);
 
-  const store = createRouteStore({ traefikUrl, fetchImpl: fetch, entryPointPorts, healthOptions, healthIntervalMs: healthSeconds * 1000 });
+  const store = createRouteStore({ traefikUrl, auth: traefikAuth, fetchImpl: fetch, entryPointPorts, healthOptions, healthIntervalMs: healthSeconds * 1000 });
   // Icons are looked up even for routes with one set in the config file, so the page can fall back to the
   // site's own icon if that one doesn't load.
   const icons = createIconStore({ options: healthOptions, saved: savedIcons ?? new Map(), onChange: events.notify });
@@ -256,7 +256,7 @@ async function main(env) {
     process.exit(1);
   });
   server.listen(port, () => {
-    console.log(`Homepage on :${port}, reading routes from ${traefikUrl} every ${pollSeconds}s, checking each route every ${healthSeconds}s, groups from ${configFile}`);
+    console.log(`Homepage on :${port}, reading routes from ${traefikUrl}${traefikAuth ? ` as ${traefikAuth.username}` : ''} every ${pollSeconds}s, checking each route every ${healthSeconds}s, groups from ${configFile}`);
     poll();
     setInterval(poll, pollSeconds * 1000).unref();
   });

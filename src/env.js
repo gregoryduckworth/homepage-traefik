@@ -1,5 +1,6 @@
+const fs = require('node:fs');
 const path = require('node:path');
-const { parseEntryPointPorts } = require('./traefik');
+const { parseEntryPointPorts, splitApiUrl } = require('./traefik');
 
 // A missing, mistyped or tiny interval would otherwise poll back to back, so it falls back to the default or is
 // raised to the minimum.
@@ -40,8 +41,43 @@ function readFrameAncestors(env, fallback = "'self'") {
   return raw;
 }
 
+// The password from TRAEFIK_API_PASSWORD_FILE, such as a Docker secret, without the line break files end with, or
+// undefined when it can't be read. `readFile` is only replaced in tests.
+function readPasswordFile(file, readFile) {
+  try {
+    return readFile(file, 'utf8').replace(/\r?\n$/, '');
+  } catch (err) {
+    console.warn(`Can't read TRAEFIK_API_PASSWORD_FILE=${file} (${err.code || err.message}), so no password is sent to the Traefik API`);
+    return undefined;
+  }
+}
+
+// The Traefik API's URL, without any username and password in it, and the username and password to send it as
+// `auth`, or null. TRAEFIK_API_USERNAME, TRAEFIK_API_PASSWORD_FILE and TRAEFIK_API_PASSWORD take the place of any in
+// the URL, and the file of the password variable.
+function readTraefikApi(env, { readFile = fs.readFileSync } = {}) {
+  const raw = env.TRAEFIK_API_URL || 'http://traefik:8080';
+  const { url, auth: fromUrl } = splitApiUrl(raw);
+  // Only a URL that doesn't parse loses its credentials without returning them.
+  if (url !== raw && !fromUrl) console.warn(`TRAEFIK_API_URL=${url} isn't a valid http:// or https:// URL, so the username and password in it are ignored. Percent-encode any @, : or / in them, or set TRAEFIK_API_USERNAME and TRAEFIK_API_PASSWORD.`);
+  const username = env.TRAEFIK_API_USERNAME || fromUrl?.username || '';
+  let password;
+  if (env.TRAEFIK_API_PASSWORD_FILE) {
+    if (env.TRAEFIK_API_PASSWORD) console.warn('Both TRAEFIK_API_PASSWORD and TRAEFIK_API_PASSWORD_FILE are set, so the password is read from the file');
+    password = readPasswordFile(env.TRAEFIK_API_PASSWORD_FILE, readFile);
+  } else {
+    password = env.TRAEFIK_API_PASSWORD || fromUrl?.password;
+  }
+  if (!username) {
+    if (password) console.warn('A password for the Traefik API is set without a username, so neither is sent. Set TRAEFIK_API_USERNAME too.');
+    return { traefikUrl: url, traefikAuth: null };
+  }
+  return { traefikUrl: url, traefikAuth: { username, password: password || '' } };
+}
+
 // Everything the server takes from its environment. A value it can't use is warned about and replaced by its default.
-function readSettings(env) {
+function readSettings(env, options) {
+  const { traefikUrl, traefikAuth } = readTraefikApi(env, options);
   const port = readPort(env);
   const frameAncestors = readFrameAncestors(env);
   const pollSeconds = readSeconds(env, 'POLL_INTERVAL_SECONDS', { fallback: 30, min: 5 });
@@ -52,7 +88,8 @@ function readSettings(env) {
   return {
     port,
     frameAncestors,
-    traefikUrl: env.TRAEFIK_API_URL || 'http://traefik:8080',
+    traefikUrl,
+    traefikAuth,
     pollSeconds,
     healthSeconds,
     title: env.HOMEPAGE_TITLE || 'Routes',
@@ -66,4 +103,4 @@ function readSettings(env) {
   };
 }
 
-module.exports = { readSettings, readSeconds, readPort, readFrameAncestors };
+module.exports = { readSettings, readSeconds, readPort, readFrameAncestors, readTraefikApi };

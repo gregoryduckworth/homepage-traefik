@@ -1,14 +1,16 @@
-const { fetchRouters, normalizeRouters } = require('./traefik');
+const { fetchRouters, normalizeRouters, splitApiUrl } = require('./traefik');
 const { checkAllRoutes, isCheckable } = require('./healthcheck');
 
 // Ticks start a little later each time, by however long the Traefik request took, so a route checked one interval
 // ago can look a moment too young. Without some slack it would wait a whole extra tick.
 const DUE_SLACK_MS = 2000;
 
-// The routes Traefik serves and the latest health check of each, refreshed by the server's poll. `checkRoutes` and
-// `now` are only replaced in tests.
+// The routes Traefik serves and the latest health check of each, refreshed by the server's poll. `auth` is the
+// username and password for the Traefik API, if it needs them; they can also be in `traefikUrl`, but are taken out of
+// it either way, so no error shows them. `checkRoutes` and `now` are only replaced in tests.
 function createRouteStore({
-  traefikUrl,
+  traefikUrl: rawTraefikUrl,
+  auth: givenAuth = null,
   fetchImpl,
   entryPointPorts = new Map(),
   checkRoutes = checkAllRoutes,
@@ -16,6 +18,8 @@ function createRouteStore({
   healthIntervalMs = 0,
   now = Date.now,
 }) {
+  const { url: traefikUrl, auth: urlAuth } = splitApiUrl(rawTraefikUrl);
+  const auth = givenAuth || urlAuth;
   const state = { routes: [], updatedAt: null, error: null };
   // Keyed by route id. Each result records the URL it checked, so a route whose URL changes is checked again. They're
   // only kept in memory: after a restart every route is checked straight away.
@@ -26,8 +30,8 @@ function createRouteStore({
     const before = JSON.stringify([state.routes, state.error]);
     try {
       const [httpRouters, tcpRouters] = await Promise.all([
-        fetchRouters(traefikUrl, { fetchImpl }),
-        fetchRouters(traefikUrl, { fetchImpl, protocol: 'tcp' }),
+        fetchRouters(traefikUrl, { fetchImpl, auth }),
+        fetchRouters(traefikUrl, { fetchImpl, auth, protocol: 'tcp' }),
       ]);
       state.routes = normalizeRouters(httpRouters, { ports: entryPointPorts, tcpRouters });
       state.updatedAt = new Date().toISOString();

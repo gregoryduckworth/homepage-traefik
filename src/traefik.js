@@ -112,16 +112,53 @@ function normalizeRouters(routers, { ports, tcpRouters = [] } = {}) {
   return [...addressable, ...unaddressable.sort(byName), ...tcp.sort(byName)];
 }
 
-// `protocol` is http or tcp, the two kinds of router this page lists.
-async function fetchRouters(baseUrl, { fetchImpl = fetch, timeoutMs = 5000, protocol = 'http' } = {}) {
+function decodeUserInfo(text) {
+  try {
+    return decodeURIComponent(text);
+  } catch {
+    return text;
+  }
+}
+
+// Splits any username and password out of a Traefik API URL such as http://admin:s3cret@traefik:8080, which fetch
+// refuses to request. Returns the URL without them, safe to show, and them as `auth`, or null when there are none. A
+// URL that isn't a valid http:// or https:// one, such as admin:s3cret@traefik:8080 without its scheme, still loses
+// everything up to its last @, so it can be shown in an error.
+function splitApiUrl(raw) {
+  const url = URL.parse(raw);
+  if (url?.protocol !== 'http:' && url?.protocol !== 'https:') {
+    return { url: raw.replace(/^([a-z][a-z0-9+.-]*:\/\/)?.*@/i, '$1'), auth: null };
+  }
+  if (!url.username && !url.password) return { url: raw, auth: null };
+  const auth = { username: decodeUserInfo(url.username), password: decodeUserInfo(url.password) };
+  url.username = '';
+  url.password = '';
+  return { url: url.href.replace(/\/$/, raw.endsWith('/') ? '/' : ''), auth };
+}
+
+function authorizationHeader({ username, password }) {
+  return `Basic ${Buffer.from(`${username}:${password}`, 'utf8').toString('base64')}`;
+}
+
+function statusError(baseUrl, status, auth) {
+  if (status !== 401 && status !== 403) return new Error(`Traefik API at ${baseUrl} responded with HTTP ${status}`);
+  return new Error(auth
+    ? `The Traefik API at ${baseUrl} refused the username and password (HTTP ${status})`
+    : `The Traefik API at ${baseUrl} asks for a username and password (HTTP ${status}). Set TRAEFIK_API_USERNAME and TRAEFIK_API_PASSWORD.`);
+}
+
+// `protocol` is http or tcp, the two kinds of router this page lists. `baseUrl` mustn't hold a username or password,
+// which fetch refuses: pass them as `auth`, from splitApiUrl, and they're sent as basic auth.
+async function fetchRouters(baseUrl, { fetchImpl = fetch, timeoutMs = 5000, protocol = 'http', auth = null } = {}) {
+  const headers = auth ? { Authorization: authorizationHeader(auth) } : {};
   const routers = [];
   let page = 1;
   while (page) {
     const url = new URL(`/api/${protocol}/routers`, baseUrl);
     url.searchParams.set('page', String(page));
     url.searchParams.set('per_page', '100');
-    const res = await fetchImpl(url, { signal: AbortSignal.timeout(timeoutMs) });
-    if (!res.ok) throw new Error(`Traefik API at ${baseUrl} responded with HTTP ${res.status}`);
+    const res = await fetchImpl(url, { headers, signal: AbortSignal.timeout(timeoutMs) });
+    if (!res.ok) throw statusError(baseUrl, res.status, auth);
     const body = await res.json();
     if (!Array.isArray(body)) throw new Error('Traefik API returned an unexpected response (expected an array of routers)');
     routers.push(...body);
@@ -131,4 +168,4 @@ async function fetchRouters(baseUrl, { fetchImpl = fetch, timeoutMs = 5000, prot
   return routers;
 }
 
-module.exports = { parseRule, parseEntryPointPorts, normalizeRouter, normalizeTcpRouter, normalizeRouters, fetchRouters };
+module.exports = { parseRule, parseEntryPointPorts, normalizeRouter, normalizeTcpRouter, normalizeRouters, splitApiUrl, fetchRouters };
