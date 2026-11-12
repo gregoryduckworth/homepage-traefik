@@ -256,3 +256,7 @@ Run the **Release** workflow from the Actions tab, on `main`, and choose `patch`
 3. Starts the image build for the tag, which runs the tests and publishes `ghcr.io/gregoryduckworth/homepage-traefik:1.2.4`, `:1.2` and `:latest` for `amd64` and `arm64`, with signed provenance and a list of the packages in it.
 
 For the first release, choose `major` to get `1.0.0`. A commit that's already released can't be released again. Pushing a `v1.2.3` tag yourself still builds and publishes the image, but doesn't write a release.
+
+## License
+
+[MIT](LICENSE). The bundled font in `public/fonts` has its own licence, the SIL Open Font License, in [`public/fonts/OFL.txt`](public/fonts/OFL.txt).

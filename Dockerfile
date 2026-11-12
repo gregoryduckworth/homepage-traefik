@@ -8,7 +8,8 @@ ARG VERSION=dev
 ENV NODE_ENV=production HOMEPAGE_VERSION=$VERSION
 WORKDIR /app
 
-COPY package.json ./
+# The MIT licence asks for its notice to travel with every copy of the code, and the image is one.
+COPY package.json LICENSE ./
 COPY src ./src
 COPY public ./public
 # Groups, route settings and found icons are saved here; mount a volume on it to keep them across container rebuilds.
