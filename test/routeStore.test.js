@@ -237,3 +237,46 @@ describe('createRouteStore credentials', () => {
     assert.equal(store.state.error, 'The Traefik API at http://traefik:8080 refused the username and password (HTTP 401)');
   });
 });
+
+describe('createRouteStore refresh logging', () => {
+  it('logs a failure once while it repeats, again when it changes, and once when Traefik answers', async t => {
+    t.mock.method(console, 'error', () => {});
+    t.mock.method(console, 'log', () => {});
+    let code = 'ECONNREFUSED';
+    let down = true;
+    const fetchImpl = async url => {
+      if (down) throw Object.assign(new Error('fetch failed'), { cause: { code } });
+      return routersResponse(url, [{ name: 'app@docker', rule: 'Host(`app.test`)' }]);
+    };
+    const store = createRouteStore({ traefikUrl: 'http://traefik:8080', fetchImpl });
+    const errors = () => console.error.mock.calls.map(call => call.arguments[0]);
+    const logs = () => console.log.mock.calls.map(call => call.arguments[0]);
+
+    for (let i = 0; i < 3; i++) await store.refresh();
+    assert.deepEqual(errors(), [
+      "Route refresh failed: Can't reach the Traefik API at http://traefik:8080 (ECONNREFUSED). Check TRAEFIK_API_URL and that the API is enabled.",
+    ]);
+    assert.match(store.state.error, /ECONNREFUSED/);
+
+    code = 'ENOTFOUND';
+    for (let i = 0; i < 3; i++) await store.refresh();
+    assert.equal(errors().length, 2);
+    assert.match(errors()[1], /ENOTFOUND/);
+
+    down = false;
+    for (let i = 0; i < 3; i++) await store.refresh();
+    assert.equal(errors().length, 2);
+    assert.deepEqual(logs(), ['Reading routes from http://traefik:8080 again']);
+    assert.equal(store.state.error, null);
+  });
+
+  it('says nothing when Traefik answers from the start', async t => {
+    t.mock.method(console, 'error', () => {});
+    t.mock.method(console, 'log', () => {});
+    const store = createRouteStore({ traefikUrl: 'http://traefik:8080', fetchImpl: async url => routersResponse(url, []) });
+    await store.refresh();
+    await store.refresh();
+    assert.equal(console.error.mock.callCount(), 0);
+    assert.equal(console.log.mock.callCount(), 0);
+  });
+});

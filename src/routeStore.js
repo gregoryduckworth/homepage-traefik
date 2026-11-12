@@ -25,9 +25,11 @@ function createRouteStore({
   // only kept in memory: after a restart every route is checked straight away.
   let healthResults = new Map();
 
-  // Resolves to whether the routes or the error changed.
+  // Resolves to whether the routes or the error changed. A failure is logged when it starts and when its message
+  // changes, not on every poll while Traefik stays down, and one line says when routes can be read again.
   async function refresh() {
-    const before = JSON.stringify([state.routes, state.error]);
+    const lastError = state.error;
+    const before = JSON.stringify([state.routes, lastError]);
     try {
       const [httpRouters, tcpRouters] = await Promise.all([
         fetchRouters(traefikUrl, { fetchImpl, auth }),
@@ -36,6 +38,7 @@ function createRouteStore({
       state.routes = normalizeRouters(httpRouters, { ports: entryPointPorts, tcpRouters });
       state.updatedAt = new Date().toISOString();
       state.error = null;
+      if (lastError) console.log(`Reading routes from ${traefikUrl} again`);
     } catch (err) {
       if (err.name === 'TimeoutError') {
         state.error = `The Traefik API at ${traefikUrl} didn't respond in time`;
@@ -44,7 +47,7 @@ function createRouteStore({
       } else {
         state.error = err.message;
       }
-      console.error(`Route refresh failed: ${state.error}`);
+      if (state.error !== lastError) console.error(`Route refresh failed: ${state.error}`);
     }
     return JSON.stringify([state.routes, state.error]) !== before;
   }
