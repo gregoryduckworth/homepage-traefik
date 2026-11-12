@@ -14,8 +14,8 @@ const HOUR_MS = 60 * 60 * 1000;
 
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
-function httpError(status) {
-  return Object.assign(new Error(`HTTP ${status}`), { status });
+function httpError(status, message = `HTTP ${status}`) {
+  return Object.assign(new Error(message), { status });
 }
 
 // Whether two hostnames are the same site, counting example.com and www.example.com as one.
@@ -51,8 +51,12 @@ function get(url, { timeoutMs, lookup, maxBytes, truncate = false, redirects = M
       if (res.statusCode >= 300 && res.statusCode < 400 && location) {
         req.destroy();
         const next = new URL(location, target);
-        if (!redirects || !sameSite(next.hostname, target.hostname) || !/^https?:$/.test(next.protocol)) {
-          settle(reject, httpError(res.statusCode));
+        const web = /^https?:$/.test(next.protocol);
+        if (!web || !sameSite(next.hostname, target.hostname)) {
+          const where = web ? next.origin : `a ${next.protocol} URL`;
+          settle(reject, httpError(res.statusCode, `HTTP ${res.statusCode} redirect to another site, ${where}`));
+        } else if (!redirects) {
+          settle(reject, httpError(res.statusCode, `More than ${MAX_REDIRECTS} redirects`));
         } else {
           settle(resolve, get(next.href, { timeoutMs, lookup, maxBytes, truncate, redirects: redirects - 1 }));
         }
@@ -191,29 +195,42 @@ async function load(url, opts) {
   return (await get(url, { ...opts, maxBytes: MAX_ICON_BYTES })).body;
 }
 
+// How a reason names an icon's URL: one inlined in the page could be kilobytes long.
+function nameOf(url) {
+  return url.startsWith('data:') ? 'an icon inlined in the page' : url;
+}
+
 // Looks for a route's icon the way a browser would: the icons its page links to, then /favicon.ico.
-// Resolves to { type, body, hash }, or null when nothing usable was found.
+// Resolves to { type, body, hash }, or rejects with why nothing usable was found: the first thing that went wrong,
+// best candidate first, such as a timeout or an icon that isn't an image. A site that simply has no icon, where
+// every candidate is a 404, isn't a fault, and its error says so with `missing`.
 async function findIcon(pageUrl, { timeoutMs = DEFAULT_TIMEOUT_MS, address, lookup } = {}) {
   const opts = { timeoutMs, lookup: lookupFor({ address, lookup }) };
+  const problems = [];
   let candidates = [];
   try {
     const page = await get(pageUrl, { ...opts, maxBytes: MAX_PAGE_BYTES, truncate: true });
     if (/html/i.test(page.type)) candidates = iconLinks(page.body.toString('utf8'), page.url).slice(0, MAX_LINKED_ICONS);
   } catch (err) {
     // No response at all means /favicon.ico won't get one either; an HTTP error page may still have a favicon beside it.
-    if (!err.status) return null;
+    if (!err.status) throw err;
+    problems.push(`the page: ${err.message}`);
   }
+  const linked = candidates.length > 0;
   candidates.push(new URL('/favicon.ico', pageUrl).href);
 
   for (const url of new Set(candidates)) {
     try {
       const icon = iconOf(await load(url, opts));
       if (icon) return icon;
-    } catch {
-      // Try the next candidate.
+      problems.push(`${nameOf(url)} isn't an image`);
+    } catch (err) {
+      if (err.status !== 404) problems.push(`${nameOf(url)}: ${err.message}`);
     }
   }
-  return null;
+  if (problems.length) throw new Error(problems[0]);
+  const missing = linked ? "none of the icons the page links to, nor /favicon.ico, are there (HTTP 404)" : "the page links to no icon and /favicon.ico isn't there (HTTP 404)";
+  throw Object.assign(new Error(missing), { missing: true });
 }
 
 function isReachable(route) {
@@ -278,12 +295,33 @@ function createIconStore({
   // is dropped.
   async function lookup(route) {
     const checkedAt = now();
-    const icon = await find(route.url, options).catch(() => null);
+    let icon = null;
+    let failure = null;
+    try {
+      icon = await find(route.url, options);
+    } catch (err) {
+      failure = err;
+    }
     const previous = entries.get(route.id);
     if (previous?.url === route.url && previous.checkedAt > checkedAt) return false;
     // A route that briefly fails keeps the icon it had, as long as its URL is the same.
     const kept = icon || (previous?.url === route.url ? previous.icon : null);
-    return set(route.id, { url: route.url, checkedAt, icon: kept });
+    return set(route.id, { url: route.url, checkedAt, icon: kept, reported: report(route, previous, kept, failure) });
+  }
+
+  // Says why a route has no icon when that's news: the first time, or when its URL or the reason changes, rather
+  // than on every hourly retry that fails the same way. A site that simply has no icon isn't a fault, so that's
+  // logged rather than warned about. A route that was reported on gets one line when an icon turns up. Returns what
+  // was last reported, which is kept on the route's entry.
+  function report(route, previous, icon, failure) {
+    if (icon) {
+      if (previous?.reported) console.log(`Found an icon for ${route.id} at ${route.url}`);
+      return null;
+    }
+    if (!failure) return null;
+    const line = `No icon for ${route.id} at ${route.url}: ${failure.message}`;
+    if (line !== previous?.reported) (failure.missing ? console.log : console.warn)(line);
+    return line;
   }
 
   // `routes` is every route the page lists; icons of routes that aren't in it are forgotten. Resolves to whether
