@@ -1,7 +1,7 @@
 const http = require('node:http');
 const fs = require('node:fs/promises');
 const path = require('node:path');
-const { ConfigError, createConfigStore } = require('./config');
+const { ConfigError, createConfigStore, groupsVersion } = require('./config');
 const { createIconStore, parseSavedIcons } = require('./favicon');
 const { createEvents } = require('./events');
 const { writeSafely, saveQuietly, readCache } = require('./files');
@@ -82,9 +82,17 @@ async function handlePut(req, res, what, save) {
   } catch (err) {
     const status = err instanceof ConfigError ? err.status : 500;
     if (status >= 500) console.error(`Saving ${what} failed: ${err.message}`);
-    if (!res.headersSent) sendJson(res, status, { error: err instanceof ConfigError ? err.message : `Saving ${what} failed` });
+    if (!res.headersSent) sendJson(res, status, err instanceof ConfigError ? { error: err.message, ...err.details } : { error: `Saving ${what} failed` });
     return false;
   }
+}
+
+// The entity tags listed in a request's If-Match header, without their quotes, or null when it has none or it's "*",
+// which the groups always match. If-Match compares tags strongly, so weak ones (W/"...") never match and are dropped.
+function ifMatchOf(req) {
+  const header = req.headers['if-match'];
+  if (header === undefined || header.trim() === '*') return null;
+  return header.split(',').map(tag => /^\s*"([^"]*)"\s*$/.exec(tag)?.[1]).filter(tag => tag !== undefined);
 }
 
 // Icons come from the routes themselves, so they're served with headers that stop an SVG running script if someone
@@ -148,6 +156,7 @@ function createServer({ store, config, title, version = null, icons = { get: () 
           icon: iconPath(route.id, icons.get(route.id)),
         })),
         groups,
+        groupsVersion: groupsVersion(groups),
         updatedAt: store.state.updatedAt,
         error: store.state.error,
         configError,
@@ -162,7 +171,7 @@ function createServer({ store, config, title, version = null, icons = { get: () 
     }
 
     if (pathname === '/api/groups') {
-      if (await handlePut(req, res, 'groups', async body => ({ groups: await config.saveGroups(body?.groups) }))) events?.notify();
+      if (await handlePut(req, res, 'groups', body => config.saveGroups(body?.groups, { ifMatch: ifMatchOf(req) }))) events?.notify();
       return;
     }
 

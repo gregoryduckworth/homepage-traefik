@@ -1,3 +1,4 @@
+const crypto = require('node:crypto');
 const fs = require('node:fs/promises');
 const { writeSafely, directoryInsteadOfFile } = require('./files');
 
@@ -6,11 +7,13 @@ const MAX_NAME_LENGTH = 60;
 const MAX_ROUTE_SETTINGS = 1000;
 const MAX_ICON_LENGTH = 2048;
 
-// Thrown for config the user can fix: a bad request body, or a hand-edited file that doesn't parse.
+// Thrown for config the user can fix: a bad request body, or a hand-edited file that doesn't parse. `details` are
+// sent back alongside the message.
 class ConfigError extends Error {
-  constructor(message, status = 400) {
+  constructor(message, status = 400, details = {}) {
     super(message);
     this.status = status;
+    this.details = details;
   }
 }
 
@@ -82,6 +85,13 @@ function parseConfig(text) {
   return { doc, groups: normalizeGroups(doc.groups ?? []), routes: normalizeRouteSettings(doc.routes ?? {}) };
 }
 
+// Identifies a list of groups, so that a change can say which groups it was made to. It's a hash of the groups
+// themselves rather than the file's version, so saving a route's name, icon or whether it's hidden doesn't count as
+// changing them.
+function groupsVersion(groups) {
+  return crypto.createHash('sha256').update(JSON.stringify(groups)).digest('base64url').slice(0, 22);
+}
+
 function versionOf(stat) {
   return `${stat.mtimeMs}:${stat.size}`;
 }
@@ -147,12 +157,24 @@ function createConfigStore({ file }) {
     cache = { ...current, ...changed, version: versionOf(await fs.stat(file)), doc, error: null };
   }
 
-  async function saveGroups(input) {
+  // Replaces the groups, and resolves to them as saved along with their version. `ifMatch`, when given, lists the
+  // versions of the groups the change may replace. When the saved groups aren't one of them, because they were
+  // changed on another page or in the file since, the change is refused rather than undo that one, and the error
+  // carries the groups as they are now.
+  async function saveGroups(input, { ifMatch = null } = {}) {
     const groups = normalizeGroups(input);
     return queue(async () => {
       const current = await readForChange('groups');
+      const currentVersion = groupsVersion(current.groups);
+      if (ifMatch && !ifMatch.includes(currentVersion)) {
+        throw new ConfigError(
+          'The groups were changed somewhere else, on another page or in the config file, before this change reached the server. Make it again on the groups as they are now.',
+          409,
+          { groups: current.groups, groupsVersion: currentVersion },
+        );
+      }
       await commit(current, { ...current.doc, groups }, { groups });
-      return groups;
+      return { groups, groupsVersion: groupsVersion(groups) };
     });
   }
 
@@ -177,4 +199,4 @@ function createConfigStore({ file }) {
   return { file, read, saveGroups, saveRoute };
 }
 
-module.exports = { ConfigError, normalizeGroups, normalizeRouteSettings, createConfigStore };
+module.exports = { ConfigError, groupsVersion, normalizeGroups, normalizeRouteSettings, createConfigStore };

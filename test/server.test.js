@@ -51,10 +51,10 @@ describe('server', () => {
     await fs.rm(configDir, { recursive: true, force: true });
   });
 
-  function putGroups(body, contentType = 'application/json') {
+  function putGroups(body, contentType = 'application/json', headers = {}) {
     return fetch(`${base}/api/groups`, {
       method: 'PUT',
-      headers: { 'Content-Type': contentType },
+      headers: { ...headers, 'Content-Type': contentType },
       body: typeof body === 'string' ? body : JSON.stringify(body),
     });
   }
@@ -100,6 +100,46 @@ describe('server', () => {
     assert.equal(saved.status, 200);
     const body = await (await fetch(`${base}/api/routes`)).json();
     assert.deepEqual(body.groups, [{ name: 'Apps', routes: ['app@docker'] }]);
+  });
+
+  it('gives the version of the groups with the routes, and with each save of them', async () => {
+    const saved = await (await putGroups({ groups: [{ name: 'Apps', routes: ['app@docker'] }] })).json();
+    const body = await (await fetch(`${base}/api/routes`)).json();
+    assert.equal(typeof saved.groupsVersion, 'string');
+    assert.equal(body.groupsVersion, saved.groupsVersion);
+  });
+
+  it('saves groups when If-Match names their current version', async () => {
+    const { groupsVersion } = await (await putGroups({ groups: [{ name: 'Apps' }] })).json();
+    const res = await putGroups({ groups: [{ name: 'Tools' }] }, 'application/json', { 'If-Match': `"stale", "${groupsVersion}"` });
+    assert.equal(res.status, 200);
+    assert.deepEqual((await res.json()).groups, [{ name: 'Tools', routes: [] }]);
+  });
+
+  it('refuses groups changed elsewhere since the version in If-Match, replying with them as they are now', async () => {
+    const { groupsVersion: before } = await (await putGroups({ groups: [{ name: 'Media' }] })).json();
+    const now = await (await putGroups({ groups: [{ name: 'Media', routes: ['app@docker'] }] })).json();
+    const res = await putGroups({ groups: [{ name: 'Media' }, { name: 'Tools' }] }, 'application/json', { 'If-Match': `"${before}"` });
+    assert.equal(res.status, 409);
+    const body = await res.json();
+    assert.match(body.error, /changed somewhere else/);
+    assert.deepEqual([body.groups, body.groupsVersion], [now.groups, now.groupsVersion]);
+    assert.deepEqual((await (await fetch(`${base}/api/routes`)).json()).groups, now.groups);
+  });
+
+  it('never matches a weak tag in If-Match, and always matches *', async () => {
+    const { groupsVersion } = await (await putGroups({ groups: [{ name: 'Media' }] })).json();
+    const weak = await putGroups({ groups: [] }, 'application/json', { 'If-Match': `W/"${groupsVersion}"` });
+    assert.equal(weak.status, 409);
+    const any = await putGroups({ groups: [] }, 'application/json', { 'If-Match': '*' });
+    assert.equal(any.status, 200);
+  });
+
+  it('keeps the version of the groups when a route is renamed', async () => {
+    const { groupsVersion } = await (await putGroups({ groups: [{ name: 'Apps', routes: ['app@docker'] }] })).json();
+    await putRoute('app@docker', { name: 'My app' });
+    assert.equal((await (await fetch(`${base}/api/routes`)).json()).groupsVersion, groupsVersion);
+    await putRoute('app@docker', { name: '' });
   });
 
   it('rejects invalid groups with a reason', async () => {

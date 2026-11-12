@@ -6,8 +6,8 @@ async function send(url, init) {
   return reply;
 }
 
-export function putJson(url, body) {
-  return send(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+export function putJson(url, body, headers = {}) {
+  return send(url, { method: 'PUT', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 }
 
 // Sent as JSON, which the server requires so that other sites can't send it.

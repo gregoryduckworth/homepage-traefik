@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
-const { normalizeGroups, normalizeRouteSettings, createConfigStore } = require('../src/config');
+const { groupsVersion, normalizeGroups, normalizeRouteSettings, createConfigStore } = require('../src/config');
 
 describe('normalizeGroups', () => {
   it('trims group names and defaults missing routes to an empty list', () => {
@@ -175,13 +175,62 @@ describe('createConfigStore', () => {
     assert.deepEqual(groups, [{ name: 'Second', routes: [] }]);
   });
 
+  it('returns the groups it saved with their version', async () => {
+    const saved = await createConfigStore({ file }).saveGroups([{ name: ' Media ' }]);
+    assert.deepEqual(saved, { groups: [{ name: 'Media', routes: [] }], groupsVersion: groupsVersion([{ name: 'Media', routes: [] }]) });
+  });
+
+  it('saves groups whose version is one the change says it may replace', async () => {
+    const store = createConfigStore({ file });
+    const first = await store.saveGroups([{ name: 'Media' }]);
+    await store.saveGroups([{ name: 'Tools' }], { ifMatch: ['stale', first.groupsVersion] });
+    assert.deepEqual((await store.read()).groups, [{ name: 'Tools', routes: [] }]);
+  });
+
+  it('refuses a change made to groups that have changed since, and says what they are now', async () => {
+    const store = createConfigStore({ file });
+    const { groupsVersion: before } = await store.saveGroups([{ name: 'Media' }]);
+    const now = await store.saveGroups([{ name: 'Media', routes: ['a@docker'] }], { ifMatch: [before] });
+    await assert.rejects(store.saveGroups([{ name: 'Media' }, { name: 'Tools' }], { ifMatch: [before] }), {
+      status: 409,
+      message: /changed somewhere else/,
+      details: now,
+    });
+    assert.deepEqual(JSON.parse(await fs.readFile(file, 'utf8')).groups, now.groups);
+  });
+
+  it('refuses the second of two changes made to the same groups at once', async () => {
+    const store = createConfigStore({ file });
+    const ifMatch = [groupsVersion([])];
+    const results = await Promise.allSettled([
+      store.saveGroups([{ name: 'First' }], { ifMatch }),
+      store.saveGroups([{ name: 'Second' }], { ifMatch }),
+    ]);
+    assert.deepEqual(results.map(result => result.status), ['fulfilled', 'rejected']);
+    assert.deepEqual((await store.read()).groups, [{ name: 'First', routes: [] }]);
+  });
+
+  it('refuses a change to groups edited in the file since they were read', async () => {
+    const store = createConfigStore({ file });
+    const { groupsVersion: before } = await store.saveGroups([{ name: 'Media' }]);
+    await fs.writeFile(file, JSON.stringify({ groups: [{ name: 'Edited by hand' }] }));
+    await assert.rejects(store.saveGroups([{ name: 'Tools' }], { ifMatch: [before] }), { status: 409 });
+  });
+
+  it('keeps the version of the groups when a route is renamed', async () => {
+    const store = createConfigStore({ file });
+    const { groupsVersion: before } = await store.saveGroups([{ name: 'Media', routes: ['a@docker'] }]);
+    await store.saveRoute('a@docker', { name: 'App', hidden: true });
+    assert.equal(groupsVersion((await store.read()).groups), before);
+  });
+
   it('leaves the file alone when a save changes nothing in it', async () => {
     await fs.mkdir(path.dirname(file));
     // Written by hand, compactly: any write would replace it with the server's own formatting.
     const text = '{"groups":[{"name":"Media","routes":["a@docker"]}],"routes":{"a@docker":{"name":"App"}}}';
     await fs.writeFile(file, text);
     const store = createConfigStore({ file });
-    assert.deepEqual(await store.saveGroups([{ name: 'Media', routes: ['a@docker'] }]), [{ name: 'Media', routes: ['a@docker'] }]);
+    assert.deepEqual((await store.saveGroups([{ name: 'Media', routes: ['a@docker'] }])).groups, [{ name: 'Media', routes: ['a@docker'] }]);
     assert.deepEqual(await store.saveRoute('a@docker', { name: 'App' }), { name: 'App' });
     assert.equal(await store.saveRoute('b@docker', { name: '' }), null);
     assert.equal(await fs.readFile(file, 'utf8'), text);

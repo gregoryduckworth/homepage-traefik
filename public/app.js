@@ -35,7 +35,11 @@ closeOnBackdrop(els.groupDialog);
 // Everything from the server but the groups, which `groups` keeps.
 let data = { routes: [], error: null, configError: null, updatedAt: null };
 const groups = createGroups({
-  put: async list => (await putJson('api/groups', { groups: list })).groups,
+  // The server refuses the change, with a 409, when the groups have changed elsewhere since `version`.
+  put: async (list, version) => {
+    const reply = await putJson('api/groups', { groups: list }, version ? { 'If-Match': `"${version}"` } : {});
+    return { groups: reply.groups, version: reply.groupsVersion };
+  },
   onChange: render,
   reload: load,
 });
@@ -371,8 +375,8 @@ async function load() {
   if (outcome.error) {
     data = { ...data, error: `Can't reach the homepage server. ${outcome.error.message}` };
   } else {
-    const { groups: loaded, ...rest } = outcome.value;
-    applyGroups(loaded || []);
+    const { groups: loaded, groupsVersion, ...rest } = outcome.value;
+    applyGroups(loaded || [], groupsVersion);
     data = rest;
   }
   if (data.title) {
