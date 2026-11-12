@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const http = require('node:http');
 const https = require('node:https');
 const net = require('node:net');
-const { checkHealth, checkAllRoutes, describeFailure, isTraefikNotFound } = require('../src/healthcheck');
+const { checkHealth, checkAllRoutes, checkTarget, describeFailure, isCheckable, isCurrent, isTraefikNotFound } = require('../src/healthcheck');
 
 const TIMEOUT_MS = 200;
 const servers = [];
@@ -164,6 +164,31 @@ describe('checkHealth', () => {
     assert.equal(host, `app.example.test:${port}`);
   });
 
+  it('marks a status outside the expected codes as unexpected and says which codes count', async () => {
+    const port = await httpServer((req, res) => res.writeHead(302, { location: 'https://sso.test' }).end());
+    const result = await checkHealth(`http://127.0.0.1:${port}`, { timeoutMs: TIMEOUT_MS, expect: [200, 204] });
+    assert.deepEqual([result.reachable, result.statusCode, result.unexpected, result.method], [true, 302, true, 'GET']);
+    assert.equal(result.detail, "127.0.0.1 answered HTTP 302, which this route's health check doesn't count as up. Only HTTP 200 or HTTP 204 does.");
+  });
+
+  it('retries with GET when HEAD answers with a status that does not count as up', async () => {
+    const port = await httpServer((req, res) => res.writeHead(req.method === 'HEAD' ? 405 : 200).end());
+    const result = await checkHealth(`http://127.0.0.1:${port}`, { timeoutMs: TIMEOUT_MS, expect: [200] });
+    assert.deepEqual([result.statusCode, result.unexpected, result.method, result.attempts], [200, false, 'GET', 2]);
+  });
+
+  it('keeps a 404 as up when no codes are expected, without retrying', async () => {
+    const port = await httpServer((req, res) => res.writeHead(404).end());
+    const result = await checkHealth(`http://127.0.0.1:${port}`, { timeoutMs: TIMEOUT_MS });
+    assert.deepEqual([result.unexpected, result.attempts], [false, 1]);
+  });
+
+  it('leaves a 5xx down on its own status rather than calling it unexpected', async () => {
+    const port = await httpServer((req, res) => res.writeHead(503).end());
+    const result = await checkHealth(`http://127.0.0.1:${port}`, { timeoutMs: TIMEOUT_MS, expect: [200] });
+    assert.deepEqual([result.statusCode, result.unexpected, result.detail], [503, false, null]);
+  });
+
   it('records when the check ran', async () => {
     const port = await httpServer((req, res) => res.writeHead(200).end());
     const { checkedAt } = await checkHealth(`http://127.0.0.1:${port}`, { timeoutMs: TIMEOUT_MS });
@@ -207,13 +232,62 @@ describe('describeFailure', () => {
   }
 });
 
+describe('checkTarget', () => {
+  const route = { id: 'grafana@docker', url: 'https://grafana.test:8443/app', status: 'enabled' };
+
+  it('checks the route\'s own address, with any status below 500 counting as up, when it has no health settings', () => {
+    assert.deepEqual(checkTarget(route), { url: 'https://grafana.test:8443/app', expect: null });
+  });
+
+  it('requests the health path on the route\'s host and port instead of its own path', () => {
+    assert.deepEqual(checkTarget(route, { path: '/api/health?full=1' }), { url: 'https://grafana.test:8443/api/health?full=1', expect: null });
+  });
+
+  it('carries the status codes that count as up', () => {
+    assert.deepEqual(checkTarget(route, { expect: [200, 204] }), { url: route.url, expect: [200, 204] });
+  });
+
+  const unchecked = [
+    ['its health check is turned off', route, { check: false, path: '/health' }],
+    ['its router is disabled', { ...route, status: 'disabled' }, null],
+    ['it has no web address', { ...route, url: null }, null],
+  ];
+  for (const [when, target, health] of unchecked) {
+    it(`is null when ${when}`, () => {
+      assert.equal(checkTarget(target, health), null);
+      assert.equal(isCheckable(target, health), false);
+    });
+  }
+});
+
+describe('isCurrent', () => {
+  const target = { url: 'https://a.test/health', expect: [200] };
+
+  it('matches a result of the same URL and status codes', () => {
+    assert.equal(isCurrent({ url: 'https://a.test/health', expect: [200] }, target), true);
+  });
+
+  const stale = [
+    ['the URL changed', { url: 'https://a.test', expect: [200] }, target],
+    ['the status codes changed', { url: 'https://a.test/health', expect: null }, target],
+    ['the route is no longer checked', { url: 'https://a.test/health', expect: [200] }, null],
+    ['there is no result', null, target],
+  ];
+  for (const [when, result, against] of stale) {
+    it(`is false when ${when}`, () => {
+      assert.equal(isCurrent(result, against), false);
+    });
+  }
+});
+
 describe('checkAllRoutes', () => {
-  it('skips disabled routes and routes without a URL', async () => {
+  it('counts only the expected status codes as up for each target', async () => {
+    const port = await httpServer((req, res) => res.writeHead(302, { location: '/login' }).end());
     const results = await checkAllRoutes([
-      { id: 'off@docker', url: 'http://off.test', status: 'disabled' },
-      { id: 'metrics@file', url: null },
-    ]);
-    assert.equal(results.size, 0);
+      { id: 'any@docker', url: `http://127.0.0.1:${port}` },
+      { id: 'strict@docker', url: `http://127.0.0.1:${port}`, expect: [200] },
+    ], { timeoutMs: TIMEOUT_MS });
+    assert.deepEqual([...results].map(([id, health]) => [id, health.unexpected]), [['any@docker', false], ['strict@docker', true]]);
   });
 
   it('keys results by route id in route order', async () => {

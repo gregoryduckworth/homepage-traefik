@@ -55,6 +55,25 @@ describe('normalizeRouteSettings', () => {
     });
   });
 
+  it('keeps a route\'s health check path, turning off and expected codes, sorted and without repeats', () => {
+    const settings = normalizeRouteSettings({
+      'grafana@docker': { health: { path: ' /api/health ' } },
+      'backup@file': { health: { check: false } },
+      'auth@docker': { health: { expect: [204, 200, 204] } },
+    });
+    assert.deepEqual(settings, {
+      'grafana@docker': { health: { path: '/api/health' } },
+      'backup@file': { health: { check: false } },
+      'auth@docker': { health: { expect: [200, 204] } },
+    });
+  });
+
+  it('drops health settings that leave the check as it would be anyway', () => {
+    assert.deepEqual(normalizeRouteSettings({ 'a@docker': { health: { path: '', check: true, expect: [] } }, 'b@docker': { name: 'B', health: null } }), {
+      'b@docker': { name: 'B' },
+    });
+  });
+
   it('drops entries with neither a name nor an icon', () => {
     assert.deepEqual(normalizeRouteSettings({ 'a@docker': { name: ' ' } }), {});
   });
@@ -67,6 +86,17 @@ describe('normalizeRouteSettings', () => {
     ['an icon is not a web address', { 'a@docker': { icon: 'jellyfin.svg' } }, /icon for route "a@docker" must be the http:\/\/ or https:\/\/ address/],
     ['hidden is not true or false', { 'a@docker': { hidden: 'yes' } }, /"hidden" for route "a@docker" must be true or false/],
     ['an icon uses another scheme', { 'a@docker': { icon: 'javascript:alert(1)' } }, /must be the http:\/\/ or https:\/\/ address/],
+    ['health is not an object', { 'a@docker': { health: '/health' } }, /"health" for route "a@docker" must be an object/],
+    ['a health path is not text', { 'a@docker': { health: { path: 1 } } }, /health check path for route "a@docker" must be text/],
+    ['a health path has no leading slash', { 'a@docker': { health: { path: 'health' } } }, /must start with a single \//],
+    ['a health path names another host', { 'a@docker': { health: { path: '//evil.test/health' } } }, /must start with a single \//],
+    ['a health path has a backslash', { 'a@docker': { health: { path: '/\\evil.test' } } }, /must start with a single \//],
+    ['a health path has a space', { 'a@docker': { health: { path: '/api health' } } }, /must start with a single \//],
+    ['a health path is too long', { 'a@docker': { health: { path: `/${'x'.repeat(2048)}` } } }, /must start with a single \//],
+    ['check is not true or false', { 'a@docker': { health: { check: 'no' } } }, /"check" in "health" for route "a@docker" must be true or false/],
+    ['expect is not a list', { 'a@docker': { health: { expect: 200 } } }, /"expect" in "health" for route "a@docker" must be a list of status codes/],
+    ['expect lists a 5xx', { 'a@docker': { health: { expect: [200, 503] } } }, /A 5xx always counts as down/],
+    ['expect lists text', { 'a@docker': { health: { expect: ['200'] } } }, /must be a list of status codes from 100 to 499/],
   ];
   for (const [when, input, message] of invalid) {
     it(`rejects input when ${when}`, () => {
@@ -299,6 +329,15 @@ describe('createConfigStore', () => {
     assert.deepEqual(await store.saveRoute('a@docker', { hidden: true }), { name: 'App', icon: 'https://cdn.test/app.png', hidden: true });
     assert.deepEqual(await store.saveRoute('a@docker', { name: 'Renamed' }), { name: 'Renamed', icon: 'https://cdn.test/app.png', hidden: true });
     assert.deepEqual(await store.saveRoute('a@docker', { hidden: false, icon: '' }), { name: 'Renamed' });
+  });
+
+  it('replaces the health settings as a whole, and keeps them when a save leaves them out', async () => {
+    const store = createConfigStore({ file });
+    await store.saveRoute('a@docker', { health: { path: '/health', expect: [200] } });
+    assert.deepEqual(await store.saveRoute('a@docker', { hidden: true }), { hidden: true, health: { path: '/health', expect: [200] } });
+    assert.deepEqual(await store.saveRoute('a@docker', { health: { check: false } }), { hidden: true, health: { check: false } });
+    assert.deepEqual(await store.saveRoute('a@docker', { hidden: false, health: null }), null);
+    assert.deepEqual(JSON.parse(await fs.readFile(file, 'utf8')), {});
   });
 
   it('refuses a hidden flag that is not true or false before saving', async () => {

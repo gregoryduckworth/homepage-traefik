@@ -6,6 +6,8 @@ const MAX_GROUPS = 100;
 const MAX_NAME_LENGTH = 60;
 const MAX_ROUTE_SETTINGS = 1000;
 const MAX_ICON_LENGTH = 2048;
+const MAX_HEALTH_PATH_LENGTH = 2048;
+const MAX_EXPECTED_CODES = 50;
 
 // Thrown for config the user can fix: a bad request body, or a hand-edited file that doesn't parse. `details` are
 // sent back alongside the message.
@@ -46,10 +48,40 @@ function normalizeGroups(input) {
   });
 }
 
-// A route's own name and icon, and whether it's hidden, all optional. Returns null when none is set, so the entry
-// can be dropped. `label` names the route mid-sentence in error messages.
+// How a route is checked, all optional: `path` is requested on the route's host instead of its own path, `check:
+// false` stops it being checked, and `expect` lists the status codes that count as up instead of any below 500. A 5xx
+// always counts as down, so it can't be listed. Returns null when none is set. `label` is as for normalizeRouteSetting.
+function normalizeHealthSetting(input, label) {
+  if (input == null) return null;
+  if (typeof input !== 'object' || Array.isArray(input)) throw new ConfigError(`"health" for ${label} must be an object with "path", "check" and "expect"`);
+
+  const rawPath = input.path ?? '';
+  if (typeof rawPath !== 'string') throw new ConfigError(`The health check path for ${label} must be text`);
+  const path = rawPath.trim();
+  // Only a path: a second slash at the start would make it another host, and so would anything URL parsing reads as one.
+  if (path && (!/^\/(?!\/)[^\s#\\]*$/.test(path) || path.length > MAX_HEALTH_PATH_LENGTH)) {
+    throw new ConfigError(`The health check path for ${label} must start with a single / and have no spaces, such as /health or /api/health`);
+  }
+
+  const check = input.check ?? true;
+  if (typeof check !== 'boolean') throw new ConfigError(`"check" in "health" for ${label} must be true or false`);
+
+  const rawExpect = input.expect ?? [];
+  const valid = Array.isArray(rawExpect) && rawExpect.length <= MAX_EXPECTED_CODES
+    && rawExpect.every(code => Number.isInteger(code) && code >= 100 && code <= 499);
+  if (!valid) {
+    throw new ConfigError(`"expect" in "health" for ${label} must be a list of status codes from 100 to 499, such as [200, 204]. A 5xx always counts as down.`);
+  }
+  const expect = [...new Set(rawExpect)].sort((a, b) => a - b);
+
+  if (!path && check && !expect.length) return null;
+  return { ...(path && { path }), ...(!check && { check }), ...(expect.length && { expect }) };
+}
+
+// A route's own name and icon, whether it's hidden and how it's checked, all optional. Returns null when none is set,
+// so the entry can be dropped. `label` names the route mid-sentence in error messages.
 function normalizeRouteSetting(input, label = 'the route') {
-  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new ConfigError(`Settings for ${label} must be an object with "name", "icon" and "hidden"`);
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new ConfigError(`Settings for ${label} must be an object with "name", "icon", "hidden" and "health"`);
   const field = key => {
     const value = input[key] ?? '';
     if (typeof value !== 'string') throw new ConfigError(`"${key}" for ${label} must be text`);
@@ -63,8 +95,9 @@ function normalizeRouteSetting(input, label = 'the route') {
   }
   const hidden = input.hidden ?? false;
   if (typeof hidden !== 'boolean') throw new ConfigError(`"hidden" for ${label} must be true or false`);
-  if (!name && !icon && !hidden) return null;
-  return { ...(name && { name }), ...(icon && { icon }), ...(hidden && { hidden }) };
+  const health = normalizeHealthSetting(input.health, label);
+  if (!name && !icon && !hidden && !health) return null;
+  return { ...(name && { name }), ...(icon && { icon }), ...(hidden && { hidden }), ...(health && { health }) };
 }
 
 // Keyed by Traefik router name. Entries for routers Traefik isn't serving are kept, like group members.
@@ -178,8 +211,9 @@ function createConfigStore({ file }) {
     });
   }
 
-  // Sets or clears one route's name, icon and whether it's hidden. A field left out of `input` keeps its saved value,
-  // so hiding a route doesn't need its name and icon. Returns the saved setting, or null when all were cleared.
+  // Sets or clears one route's name, icon, whether it's hidden and its health check settings. A field left out of
+  // `input` keeps its saved value, so hiding a route doesn't need its name and icon; `health` is replaced as a whole.
+  // Returns the saved setting, or null when all were cleared.
   async function saveRoute(id, input) {
     if (typeof id !== 'string' || !id) throw new ConfigError('Give the router name of the route to change');
     normalizeRouteSetting(input);

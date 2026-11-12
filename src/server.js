@@ -9,6 +9,7 @@ const { readSettings } = require('./env');
 const { createRouteStore } = require('./routeStore');
 const { createPoller } = require('./poller');
 const { createHistory, parseSavedHistory } = require('./history');
+const { checkTarget, isCurrent } = require('./healthcheck');
 
 const PUBLIC_DIR = path.resolve(__dirname, '..', 'public');
 
@@ -112,6 +113,12 @@ function sendIcon(res, icon) {
   res.end(icon.body);
 }
 
+// The route's latest health check, unless it was made before the route's health settings changed, say to check another
+// path. The route then shows as being checked until the next check, rather than with the old result.
+function currentHealth(route, custom) {
+  return isCurrent(route.health, checkTarget(route, custom?.health)) ? route.health : null;
+}
+
 function iconPath(id, icon) {
   return icon ? `api/icons/${encodeURIComponent(id)}?v=${icon.hash}` : null;
 }
@@ -163,11 +170,10 @@ function createServer({ store, config, title, version = null, icons = { get: () 
         title,
         version,
         readOnly,
-        routes: store.getRoutesWithHealth().map(route => ({
-          ...route,
-          custom: settings[route.id] || null,
-          icon: iconPath(route.id, icons.get(route.id)),
-        })),
+        routes: store.getRoutesWithHealth().map(route => {
+          const custom = Object.hasOwn(settings, route.id) ? settings[route.id] : null;
+          return { ...route, health: currentHealth(route, custom), custom, icon: iconPath(route.id, icons.get(route.id)) };
+        }),
         groups,
         groupsVersion: groupsVersion(groups),
         updatedAt: store.state.updatedAt,
@@ -177,9 +183,19 @@ function createServer({ store, config, title, version = null, icons = { get: () 
       return;
     }
 
+    // A change to how the route is checked is checked straight away, rather than at the next poll, so the page soon
+    // shows what the new check finds. That includes turning the check back on, by when the route has no result at
+    // all. A route that isn't checked, such as one whose check was just turned off, is left alone by checkRoute.
     if (pathname.startsWith('/api/routes/')) {
       const id = pathParam(pathname, '/api/routes/');
-      if (await put(req, res, 'the route', async body => ({ custom: await config.saveRoute(id, body) }))) events?.notify();
+      let custom = null;
+      if (await put(req, res, 'the route', async body => ({ custom: custom = await config.saveRoute(id, body) }))) {
+        events?.notify();
+        const route = store.getRoutesWithHealth().find(r => r.id === id);
+        if (check && route && !currentHealth(route, custom)) {
+          checkOnce(id).catch(err => console.error(`Checking ${id} after its health settings changed failed: ${err.message}`));
+        }
+      }
       return;
     }
 
@@ -192,7 +208,7 @@ function createServer({ store, config, title, version = null, icons = { get: () 
       if (!accepts(req, res, 'POST')) return;
       const route = await checkOnce(pathParam(pathname, '/api/check/'));
       if (route) sendJson(res, 200, { health: route.health });
-      else sendJson(res, 404, { error: 'There’s no route by that name with an address to check' });
+      else sendJson(res, 404, { error: 'There’s no route by that name with an address to check, or its check is turned off' });
       return;
     }
 
@@ -274,7 +290,8 @@ async function main(env) {
 
   const history = createHistory({ intervalMs: healthSeconds * 1000, saved: savedHistory ?? new Map() });
   const saveHistory = saveQuietly(`Saving route history to ${historyFile}`, () => writeSafely(historyFile, history.serialize()));
-  const store = createRouteStore({ traefikUrl, auth: traefikAuth, fetchImpl: fetch, entryPointPorts, healthOptions, healthIntervalMs: healthSeconds * 1000, history });
+  const routeSettings = async () => (await config.read()).routes;
+  const store = createRouteStore({ traefikUrl, auth: traefikAuth, fetchImpl: fetch, entryPointPorts, healthOptions, healthIntervalMs: healthSeconds * 1000, history, routeSettings });
   // Icons are looked up even for routes with one set in the config file, so the page can fall back to the
   // site's own icon if that one doesn't load.
   const icons = createIconStore({ options: healthOptions, saved: savedIcons ?? new Map(), onChange: events.notify });
