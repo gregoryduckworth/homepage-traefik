@@ -441,6 +441,76 @@ describe('shutDown', () => {
   });
 });
 
+describe('read-only', () => {
+  let server;
+  let base;
+  let configDir;
+  let file;
+  const saved = { groups: [{ name: 'Apps', routes: ['app@docker'] }], routes: { 'app@docker': { name: 'App' } } };
+
+  before(async () => {
+    configDir = await fs.mkdtemp(path.join(os.tmpdir(), 'homepage-read-only-'));
+    file = path.join(configDir, 'homepage.json');
+    await fs.writeFile(file, JSON.stringify(saved));
+    const fetchImpl = async url => routersResponse(url, [{ name: 'app@docker', rule: 'Host(`app.test`)', status: 'enabled' }]);
+    const checkRoutes = async routes => new Map(routes.map(route => [route.id, { reachable: true, statusCode: 200 }]));
+    const store = createRouteStore({ traefikUrl: 'http://traefik:8080', fetchImpl, checkRoutes });
+    await store.refresh();
+    const config = createConfigStore({ file });
+    server = createServer({ store, config, title: 'Lab', check: store.checkRoute, readOnly: true });
+    await new Promise(resolve => server.listen(0, resolve));
+    base = `http://127.0.0.1:${server.address().port}`;
+  });
+
+  after(async () => {
+    server.close();
+    await fs.rm(configDir, { recursive: true, force: true });
+  });
+
+  function put(pathname, body) {
+    return fetch(`${base}${pathname}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  }
+
+  it('tells the page it is read-only, with the saved groups and routes', async () => {
+    const body = await (await fetch(`${base}/api/routes`)).json();
+    assert.equal(body.readOnly, true);
+    assert.deepEqual(body.groups, saved.groups);
+    assert.deepEqual(body.routes[0].custom, { name: 'App' });
+  });
+
+  it('refuses to change the groups or a route with a 403, and leaves the config file alone', async () => {
+    for (const [pathname, body] of [['/api/groups', { groups: [] }], ['/api/routes/app%40docker', { hidden: true }]]) {
+      const res = await put(pathname, body);
+      assert.equal(res.status, 403, pathname);
+      assert.match((await res.json()).error, /read-only/);
+    }
+    assert.deepEqual(JSON.parse(await fs.readFile(file, 'utf8')), saved);
+  });
+
+  it('still answers other methods on those endpoints with a 405', async () => {
+    const res = await fetch(`${base}/api/groups`, { method: 'POST' });
+    assert.equal(res.status, 405);
+  });
+
+  it('still checks a route when asked, since that saves nothing', async () => {
+    const res = await fetch(`${base}/api/check/app%40docker`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    assert.equal(res.status, 200);
+    assert.equal((await res.json()).health.statusCode, 200);
+  });
+
+  it('is off unless asked for', async () => {
+    const config = { read: async () => ({ groups: [], routes: {}, error: null }) };
+    const other = createServer({ store: createRouteStore({ traefikUrl: 'http://traefik:8080', fetchImpl: async () => jsonResponse([]) }), config, title: 'Lab' });
+    await new Promise(resolve => other.listen(0, resolve));
+    try {
+      const body = await (await fetch(`http://127.0.0.1:${other.address().port}/api/routes`)).json();
+      assert.equal(body.readOnly, false);
+    } finally {
+      other.close();
+    }
+  });
+});
+
 describe('frame ancestors', () => {
 
   it('go into the page\'s Content-Security-Policy', async () => {

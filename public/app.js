@@ -33,7 +33,7 @@ const els = {
 closeOnBackdrop(els.groupDialog);
 
 // Everything from the server but the groups, which `groups` keeps.
-let data = { routes: [], error: null, configError: null, updatedAt: null };
+let data = { routes: [], error: null, configError: null, updatedAt: null, readOnly: false };
 const groups = createGroups({
   // The server refuses the change, with a 409, when the groups have changed elsewhere since `version`.
   put: async (list, version) => {
@@ -47,6 +47,11 @@ const groups = createGroups({
 let renderPending = false;
 // Hidden routes are left off the page, the strip and the summary until someone chooses to show them.
 let showHidden = false;
+
+// A read-only homepage (READ_ONLY=true on the server) shows the page without the controls that change it.
+function canEdit() {
+  return !data.readOnly;
+}
 
 // The routes the strip and the summary count: every route that isn't hidden.
 function watchedRoutes() {
@@ -124,9 +129,11 @@ function renderTile(route) {
   tile.append(link, info);
   const item = el('li');
   item.dataset.route = route.id;
-  item.draggable = true;
-  item.addEventListener('dragstart', event => drag.startDrag(event, item));
-  item.addEventListener('dragend', drag.endDrag);
+  if (canEdit()) {
+    item.draggable = true;
+    item.addEventListener('dragstart', event => drag.startDrag(event, item));
+    item.addEventListener('dragend', drag.endDrag);
+  }
   item.append(tile);
   return item;
 }
@@ -157,8 +164,8 @@ function summaryText() {
   return parts.join(', ');
 }
 
-// Custom groups get buttons to move, rename and delete them, and can be dragged by their heading; entry point
-// groups are where ungrouped routes land. A section is as sectionsFor lists it.
+// Custom groups get buttons to move, rename and delete them, and can be dragged by their heading, unless the homepage
+// is read-only; entry point groups are where ungrouped routes land. A section is as sectionsFor lists it.
 function renderSection({ title, routes, group, hidden: hiddenCount }) {
   const section = el('section', 'group');
   const head = el('div', 'group-head');
@@ -167,8 +174,8 @@ function renderSection({ title, routes, group, hidden: hiddenCount }) {
   head.append(heading);
   section.append(head);
 
-  if (group) {
-    section.dataset.group = group.name;
+  if (group) section.dataset.group = group.name;
+  if (group && canEdit()) {
     head.draggable = true;
     head.addEventListener('dragstart', event => drag.startGroupDrag(event, section));
     head.addEventListener('dragend', drag.endDrag);
@@ -189,7 +196,7 @@ function renderSection({ title, routes, group, hidden: hiddenCount }) {
   if (group && !routes.length) {
     section.append(el('p', 'group-empty', hiddenCount
       ? `Every route in this group is hidden. Select “Show ${plural(hiddenCount, 'hidden route')}” to see ${hiddenCount === 1 ? 'it' : 'them'}.`
-      : 'Drag routes here, or choose this group in a route’s details.'));
+      : canEdit() ? 'Drag routes here, or choose this group in a route’s details.' : 'There are no routes in this group.'));
   } else {
     const list = el('ul', 'tiles');
     list.append(...routes.map(renderTile));
@@ -235,6 +242,7 @@ function render() {
   if (focused) [...els.routes.querySelectorAll('[aria-label]')].find(node => node.getAttribute('aria-label') === focused)?.focus();
 
   renderNotice();
+  els.newGroup.hidden = !canEdit();
 
   renderStrip();
   details.refresh();
@@ -346,6 +354,7 @@ const details = createDetails({
   placeOf,
   shiftRoute,
   showingHidden: () => showHidden,
+  canEdit,
   render,
   load,
 });

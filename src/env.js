@@ -29,6 +29,16 @@ function readPort(env, fallback = 3000) {
   return fallback;
 }
 
+// A yes-or-no setting such as READ_ONLY=true, false when unset. Anything that isn't clearly yes or no is warned about
+// and treated as yes: someone who set READ_ONLY=ture meant to turn it on, and leaving the page open to changes
+// would be the worse mistake.
+function readFlag(env, name) {
+  const raw = (env[name] || '').trim().toLowerCase();
+  if (['', 'false', '0', 'no', 'off'].includes(raw)) return false;
+  if (!['true', '1', 'yes', 'on'].includes(raw)) console.warn(`${name}=${env[name]} should be true or false, so true is used`);
+  return true;
+}
+
 // The sources in FRAME_ANCESTORS, such as "https://dash.example.com" or "*", go straight into a header, so anything
 // that would end the directive or the header is refused.
 function readFrameAncestors(env, fallback = "'self'") {
@@ -80,6 +90,7 @@ function readSettings(env, options) {
   const { traefikUrl, traefikAuth } = readTraefikApi(env, options);
   const port = readPort(env);
   const frameAncestors = readFrameAncestors(env);
+  const readOnly = readFlag(env, 'READ_ONLY');
   const pollSeconds = readSeconds(env, 'POLL_INTERVAL_SECONDS', { fallback: 30, min: 5 });
   const healthSeconds = readSeconds(env, 'HEALTHCHECK_INTERVAL_SECONDS', { fallback: 60, min: 10 });
   const { ports: entryPointPorts, invalid: invalidPorts } = parseEntryPointPorts(env.ENTRYPOINT_PORTS);
@@ -88,6 +99,7 @@ function readSettings(env, options) {
   return {
     port,
     frameAncestors,
+    readOnly,
     traefikUrl,
     traefikAuth,
     pollSeconds,
@@ -103,4 +115,4 @@ function readSettings(env, options) {
   };
 }
 
-module.exports = { readSettings, readSeconds, readPort, readFrameAncestors, readTraefikApi };
+module.exports = { readSettings, readSeconds, readPort, readFlag, readFrameAncestors, readTraefikApi };

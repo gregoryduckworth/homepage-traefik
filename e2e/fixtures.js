@@ -47,11 +47,14 @@ const ROUTERS = [
 ];
 
 // `homepage` is a running homepage server with its own config folder, reading from its own fake Traefik, and
-// reporting `version` as the image's version. Health checks are pinned to this machine so they never leave it; these
+// reporting `version` as the image's version. It starts with `savedConfig` in its config file, if given, and is
+// read-only when `readOnly` is set. Health checks are pinned to this machine so they never leave it; these
 // tests don't depend on their results.
 const test = base.extend({
   routers: [ROUTERS, { option: true }],
   version: ['1.2.3', { option: true }],
+  readOnly: [false, { option: true }],
+  savedConfig: [null, { option: true }],
 
   traefik: async ({ routers }, use) => {
     const traefik = await startTraefik(structuredClone(routers));
@@ -59,10 +62,14 @@ const test = base.extend({
     await traefik.close();
   },
 
-  homepage: async ({ traefik, version }, use) => {
+  homepage: async ({ traefik, version, readOnly, savedConfig }, use) => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'homepage-e2e-'));
     const port = await freePort();
     const configFile = path.join(dir, 'config', 'homepage.json');
+    if (savedConfig) {
+      await fs.mkdir(path.dirname(configFile));
+      await fs.writeFile(configFile, JSON.stringify(savedConfig));
+    }
     const child = spawn(process.execPath, [SERVER], {
       env: {
         ...process.env,
@@ -73,6 +80,7 @@ const test = base.extend({
         HEALTHCHECK_ADDRESS: '127.0.0.1',
         HEALTHCHECK_TIMEOUT_SECONDS: '1',
         HOMEPAGE_VERSION: version,
+        READ_ONLY: String(readOnly),
       },
       stdio: 'ignore',
     });

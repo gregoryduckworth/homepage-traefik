@@ -1,7 +1,7 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
-const { readSettings, readSeconds, readPort, readFrameAncestors, readTraefikApi } = require('../src/env');
+const { readSettings, readSeconds, readPort, readFlag, readFrameAncestors, readTraefikApi } = require('../src/env');
 
 describe('readSeconds', () => {
   const opts = { fallback: 30, min: 5 };
@@ -37,6 +37,26 @@ describe('readPort', () => {
       assert.equal(readPort(env), expected);
     });
   }
+});
+
+describe('readFlag', () => {
+  const cases = [
+    ['is false when unset', {}, false, false],
+    ['is false when empty', { READ_ONLY: ' ' }, false, false],
+    ['warns about a value that is neither and treats it as true, so a typo never leaves the page open', { READ_ONLY: 'ture' }, true, true],
+  ];
+  for (const [name, env, expected, warns] of cases) {
+    it(name, t => {
+      t.mock.method(console, 'warn', () => {});
+      assert.equal(readFlag(env, 'READ_ONLY'), expected);
+      assert.equal(console.warn.mock.callCount(), warns ? 1 : 0);
+    });
+  }
+
+  it('accepts each way of saying yes or no, in any case and with spaces around it', () => {
+    for (const value of ['true', '1', 'yes', ' On ', 'TRUE']) assert.equal(readFlag({ READ_ONLY: value }, 'READ_ONLY'), true, value);
+    for (const value of ['false', '0', 'no', 'off', 'False ']) assert.equal(readFlag({ READ_ONLY: value }, 'READ_ONLY'), false, value);
+  });
 });
 
 describe('readFrameAncestors', () => {
@@ -108,6 +128,7 @@ describe('readSettings', () => {
     assert.deepEqual(settings, {
       port: 3000,
       frameAncestors: "'self'",
+      readOnly: false,
       traefikUrl: 'http://traefik:8080',
       traefikAuth: null,
       pollSeconds: 30,
@@ -124,6 +145,7 @@ describe('readSettings', () => {
     const settings = readSettings({
       PORT: '8080',
       FRAME_ANCESTORS: 'https://dash.test',
+      READ_ONLY: 'true',
       TRAEFIK_API_URL: 'http://proxy:8080',
       POLL_INTERVAL_SECONDS: '15',
       HEALTHCHECK_INTERVAL_SECONDS: '120',
@@ -137,6 +159,7 @@ describe('readSettings', () => {
     assert.deepEqual(settings, {
       port: 8080,
       frameAncestors: 'https://dash.test',
+      readOnly: true,
       traefikUrl: 'http://proxy:8080',
       traefikAuth: null,
       pollSeconds: 15,

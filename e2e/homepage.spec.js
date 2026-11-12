@@ -282,6 +282,33 @@ test.describe('a build of main', () => {
   });
 });
 
+test.describe('a read-only homepage', () => {
+  test.use({
+    readOnly: true,
+    savedConfig: { groups: [{ name: 'Media', routes: ['jellyfin@docker', 'grafana@docker'] }], routes: { 'sonarr@docker': { hidden: true } } },
+  });
+
+  test('shows the saved layout without the controls that change it', async ({ page }) => {
+    await expect(page.getByRole('heading', { level: 2 })).toHaveText(['Media (2)']);
+    await expect(page.getByRole('button', { name: 'New group' })).toBeHidden();
+    await expect(page.getByRole('button', { name: /^(Rename|Delete|Move) Media/ })).toHaveCount(0);
+    await expect(page.locator('[draggable="true"]')).toHaveCount(0);
+
+    await details(page, 'jellyfin').click();
+    const dialog = page.getByRole('dialog', { name: 'jellyfin' });
+    await expect(dialog.getByRole('button', { name: 'Check now' })).toBeVisible();
+    await expect(dialog.getByLabel('Group')).toBeHidden();
+    await expect(dialog.getByRole('button', { name: /^Move (up|down)$/ })).toBeHidden();
+    await expect(dialog.getByRole('button', { name: 'Change name or icon' })).toBeHidden();
+    await expect(dialog.getByRole('button', { name: 'Hide route' })).toBeHidden();
+  });
+
+  test('still lets hidden routes be shown, which only changes this page', async ({ page }) => {
+    await page.getByRole('button', { name: 'Show 1 hidden route' }).click();
+    await expect(details(page, 'sonarr')).toBeVisible();
+  });
+});
+
 test.describe('theme', () => {
   test.use({ colorScheme: 'light' });
 

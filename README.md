@@ -129,6 +129,7 @@ How a router is shown:
 | `CONFIG_FILE`                  | `config/homepage.json` | Where your groups, names and icons are saved (`/app/config/homepage.json` in the image)             |
 | `PORT`                         | `3000`                 | Port the homepage listens on                                                                        |
 | `FRAME_ANCESTORS`              | `'self'`               | Sites allowed to show the homepage in a frame, for example `https://dash.example.com`               |
+| `READ_ONLY`                    | `false`                | Set to `true` to show the page without letting anyone change it (see [below](#sharing-the-page-read-only)) |
 
 ## Health checks
 
@@ -166,7 +167,39 @@ The file is in PEM format, starting with `-----BEGIN CERTIFICATE-----`, and can 
 - **Groups:** select **New group**, then drag routes onto it, or pick it from the **Group** menu in a route's details. Reorder groups by dragging their headings or with the arrow buttons beside their names, and routes within a group by dragging them or with **Move up** and **Move down** in their details. The menu and buttons work with a keyboard and on phones. Routes in no group are listed by name. Deleting a group sends its routes back to their entry point groups.
 - Press `/` to search by name, address, service or rule. The page has light and dark themes, and updates by itself when anything changes.
 
-Anyone who can open the homepage can change these settings. Put authentication middleware in front of it in Traefik if that matters to you.
+Anyone who can open the homepage can change these settings, unless it's [read-only](#sharing-the-page-read-only). Put authentication middleware in front of it in Traefik if that matters to you.
+
+### Sharing the page read-only
+
+To let people see the page without letting them change it, say in a shared house where one person arranges it, set `READ_ONLY=true`. The page then has no **New group** button, no buttons beside group names and no dragging, and a route's details have no **Group** menu, **Move up** or **Move down**, **Change name or icon** or **Hide route**. The server refuses any change with a `403`, so the settings can't be changed by calling the API directly either. Everyone can still search, show hidden routes on their own screen and select **Check now**, which checks a route without saving anything.
+
+To change the layout of a read-only homepage, either edit `homepage.json` by hand (see [Saved settings](#saved-settings)), or run a second, editable homepage on the same config folder behind authentication middleware:
+
+```yaml
+services:
+  homepage:
+    image: ghcr.io/gregoryduckworth/homepage-traefik:latest
+    environment:
+      READ_ONLY: "true"
+    volumes:
+      - ./config:/app/config
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.homepage.rule=Host(`home.example.com`)
+      - traefik.http.services.homepage.loadbalancer.server.port=3000
+
+  homepage-editor:
+    image: ghcr.io/gregoryduckworth/homepage-traefik:latest
+    volumes:
+      - ./config:/app/config
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.homepage-editor.rule=Host(`home-edit.example.com`)
+      - traefik.http.routers.homepage-editor.middlewares=my-auth@file
+      - traefik.http.services.homepage-editor.loadbalancer.server.port=3000
+```
+
+Changes saved on the editable one show up on the read-only one within 30 seconds. Each still reads routes from Traefik and checks them on its own.
 
 ## Saved settings
 
@@ -235,6 +268,8 @@ Docker keeps container logs on disk, so a size limit such as `logging: { driver:
 | `GET /healthz`                  | Liveness check                                                                                                 |
 
 `PUT` bodies, and `POST` requests, are sent as `application/json`.
+
+On a [read-only](#sharing-the-page-read-only) homepage, `GET /api/routes` includes `"readOnly": true` and both `PUT` endpoints answer with a `403`. `POST /api/check/<router name>` still works, as it saves nothing.
 
 The page sends `If-Match` with every group change, so a change made on a page that missed one saved elsewhere, say because its connection dropped, doesn't silently undo it. The page says the change wasn't saved and shows the groups as they are now. `groupsVersion` only changes when the groups do: renaming, hiding or giving an icon to a route leaves it alone.
 
