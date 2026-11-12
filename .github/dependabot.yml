@@ -1,4 +1,4 @@
-# Keeps the GitHub Actions, the Node base image and the development dependencies (Playwright, ESLint) up to date.
+# Keeps the GitHub Actions, the Node base image and the development dependencies (Playwright, ESLint, VitePress) up to date.
 version: 2
 updates:
   - package-ecosystem: github-actions
