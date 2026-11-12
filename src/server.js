@@ -130,14 +130,25 @@ function pathParam(pathname, prefix) {
 // only the homepage itself may, which stops another site tricking someone into dragging routes about. `version` is the
 // image's version, shown at the foot of the page, or null when not running from the image. `check`, when given, serves
 // /api/check/<id>, which checks a route and looks up its icon now rather than when they're next due; it resolves to
-// the route with its new health, or null when there's nothing to check.
-function createServer({ store, config, title, version = null, icons = { get: () => null }, events = null, check = null, frameAncestors = "'self'" }) {
+// the route with its new health, or null when there's nothing to check. `readOnly` refuses every change to the groups
+// and routes with a 403, and tells the page so it can hide its editing controls; routes can still be checked, as
+// that saves nothing.
+function createServer({ store, config, title, version = null, icons = { get: () => null }, events = null, check = null, frameAncestors = "'self'", readOnly = false }) {
   // Checks under way, by route id, so a route asked for again from another page waits for the same check.
   const checks = new Map();
 
   function checkOnce(id) {
     if (!checks.has(id)) checks.set(id, check(id).finally(() => checks.delete(id)));
     return checks.get(id);
+  }
+
+  // Like handlePut, but a PUT to a read-only homepage is refused before its body is read.
+  function put(req, res, what, save) {
+    if (readOnly && req.method === 'PUT') {
+      sendJson(res, 403, { error: 'This homepage is read-only, so nothing on it can be changed here' });
+      return false;
+    }
+    return handlePut(req, res, what, save);
   }
 
   async function handle(req, res) {
@@ -150,6 +161,7 @@ function createServer({ store, config, title, version = null, icons = { get: () 
       sendJson(res, 200, {
         title,
         version,
+        readOnly,
         routes: store.getRoutesWithHealth().map(route => ({
           ...route,
           custom: settings[route.id] || null,
@@ -166,12 +178,12 @@ function createServer({ store, config, title, version = null, icons = { get: () 
 
     if (pathname.startsWith('/api/routes/')) {
       const id = pathParam(pathname, '/api/routes/');
-      if (await handlePut(req, res, 'the route', async body => ({ custom: await config.saveRoute(id, body) }))) events?.notify();
+      if (await put(req, res, 'the route', async body => ({ custom: await config.saveRoute(id, body) }))) events?.notify();
       return;
     }
 
     if (pathname === '/api/groups') {
-      if (await handlePut(req, res, 'groups', body => config.saveGroups(body?.groups, { ifMatch: ifMatchOf(req) }))) events?.notify();
+      if (await put(req, res, 'groups', body => config.saveGroups(body?.groups, { ifMatch: ifMatchOf(req) }))) events?.notify();
       return;
     }
 
@@ -241,7 +253,7 @@ function shutDown({ server, events = null, graceMs = 1000 }) {
 
 // Starts the homepage as `env` sets it up: serves the page, and polls Traefik until it's stopped.
 async function main(env) {
-  const { port, frameAncestors, traefikUrl, traefikAuth, pollSeconds, healthSeconds, title, version, entryPointPorts, configFile, healthOptions } = readSettings(env);
+  const { port, frameAncestors, readOnly, traefikUrl, traefikAuth, pollSeconds, healthSeconds, title, version, entryPointPorts, configFile, healthOptions } = readSettings(env);
   // Icons found on the sites are saved beside the config file, so a restart shows them straight away.
   const iconsFile = path.join(path.dirname(configFile), 'icons.json');
   const config = createConfigStore({ file: configFile });
@@ -255,7 +267,7 @@ async function main(env) {
   const saveIcons = saveQuietly(`Saving icons to ${iconsFile}`, () => writeSafely(iconsFile, icons.serialize()));
   const { poll, check } = createPoller({ store, icons, events, saveIcons });
 
-  const server = createServer({ store, config, title, version, icons, events, check, frameAncestors });
+  const server = createServer({ store, config, title, version, icons, events, check, frameAncestors, readOnly });
   // Polling only starts once the server is listening. A port it can't listen on, such as one already in use, ends
   // it with a sentence rather than Node's stack trace.
   server.once('error', err => {
@@ -265,7 +277,7 @@ async function main(env) {
     process.exit(1);
   });
   server.listen(port, () => {
-    console.log(`Homepage on :${port}, reading routes from ${traefikUrl}${traefikAuth ? ` as ${traefikAuth.username}` : ''} every ${pollSeconds}s, checking each route every ${healthSeconds}s, groups from ${configFile}`);
+    console.log(`Homepage on :${port}, reading routes from ${traefikUrl}${traefikAuth ? ` as ${traefikAuth.username}` : ''} every ${pollSeconds}s, checking each route every ${healthSeconds}s, groups from ${configFile}${readOnly ? ', read-only' : ''}`);
     poll();
     setInterval(poll, pollSeconds * 1000).unref();
   });

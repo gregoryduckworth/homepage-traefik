@@ -8,9 +8,10 @@ import { addressOf, detailRows, displayName, isHidden, statusOf } from './routes
 // `routeOf` finds a route the page lists by id, and `groups` returns the custom groups. `moveRoute` puts a route in
 // a group, or in none. `placeOf` returns the custom group a route is in and the ids of the routes the page lists in
 // it, in order, as { group, listed }, or null for a route in no group. `shiftRoute` moves a route one place up (-1)
-// or down (1) in its group. `showingHidden` says whether hidden routes are on the page. `render` shows a change made
-// here straight away, and `load` fetches everything afresh once the server has it.
-export function createDetails({ routeOf, groups, moveRoute, placeOf, shiftRoute, showingHidden, render, load }) {
+// or down (1) in its group. `showingHidden` says whether hidden routes are on the page, and `canEdit` whether the
+// homepage can be changed; when it can't, the panel only shows the route and lets it be checked. `render` shows a
+// change made here straight away, and `load` fetches everything afresh once the server has it.
+export function createDetails({ routeOf, groups, moveRoute, placeOf, shiftRoute, showingHidden, canEdit, render, load }) {
   const els = {
     details: $('details'),
     group: $('details-group'),
@@ -20,6 +21,7 @@ export function createDetails({ routeOf, groups, moveRoute, placeOf, shiftRoute,
     moved: $('details-moved'),
     check: $('details-check'),
     checkError: $('details-check-error'),
+    edit: $('details-edit'),
     hide: $('details-hide'),
     routeDialog: $('route-dialog'),
     routeForm: $('route-form'),
@@ -58,16 +60,17 @@ export function createDetails({ routeOf, groups, moveRoute, placeOf, shiftRoute,
     const current = groupOf(groups(), route.id);
     els.group.replaceChildren(new Option('None', ''), ...groups().map(group => new Option(group.name, group.name)));
     els.group.value = current ? current.name : '';
-    els.group.parentElement.hidden = !groups().length;
+    els.group.parentElement.hidden = !canEdit() || !groups().length;
 
     // Routes in no group are listed by name, so only those in a group, with others beside them, can be moved.
     const place = placeOf(route.id);
     const index = place ? place.listed.indexOf(route.id) : -1;
-    els.order.hidden = index < 0 || place.listed.length < 2;
+    els.order.hidden = !canEdit() || index < 0 || place.listed.length < 2;
     els.up.disabled = index <= 0;
     els.down.disabled = index < 0 || index === place.listed.length - 1;
 
     els.hide.textContent = isHidden(route) ? 'Show route' : 'Hide route';
+    els.edit.hidden = els.hide.hidden = !canEdit();
 
     // Only routes the server checks can be checked now: disabled routes and those with no web address never are.
     // While a check runs the button stays focusable, so a keyboard user isn't thrown out of the dialog, but does
@@ -172,7 +175,7 @@ export function createDetails({ routeOf, groups, moveRoute, placeOf, shiftRoute,
   // Names and icons are saved one route at a time, and the dialog stays open until the server has the change.
   let editingRoute = null;
 
-  $('details-edit').addEventListener('click', () => {
+  els.edit.addEventListener('click', () => {
     const route = routeOf(detailsId);
     if (!route) return;
     editingRoute = route.id;

@@ -183,6 +183,7 @@ h1 {
   cursor: pointer;
 }
 
+.tool-button[hidden] { display: none; }
 .tool-button:hover { border-color: var(--accent); }
 .tool-button svg { width: 1rem; height: 1rem; color: var(--accent); }
 
@@ -256,7 +257,7 @@ main {
 }
 
 .group[data-group] h2 { color: var(--ink); }
-.group[data-group] .group-head { cursor: grab; }
+.group[data-group] .group-head[draggable="true"] { cursor: grab; }
 .group h2 span { font-weight: 400; color: var(--muted); }
 
 .group-tool {
@@ -567,7 +568,9 @@ a.tile-link:hover .tile-name { color: var(--accent); }
   margin: -0.25rem 1.25rem 1rem;
 }
 
-.details-order[hidden] { display: none; }
+.details-group[hidden],
+.details-order[hidden],
+.details-edit[hidden] { display: none; }
 .details-order button { flex: 1; }
 .details-order button:disabled { color: var(--muted); opacity: 0.5; cursor: default; }
 
