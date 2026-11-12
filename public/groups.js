@@ -106,11 +106,13 @@ export function createGroups({ put, onChange, reload }) {
 
   // Call as a load of the groups from the server starts. It returns a function to call with the groups it loaded and
   // their version, which keeps the page's own groups instead if they changed while the request was out: the response
-  // may predate the change.
+  // may predate the change. A load that started while a save was out is ignored too, even if it comes back after: the
+  // server may have answered it before saving, and its old version would get the next change refused.
   function startLoad() {
     const editsBefore = edits;
+    const sendingBefore = sending;
     return (loaded, loadedVersion = null) => {
-      if (sending || edits !== editsBefore) return;
+      if (sending || sendingBefore || edits !== editsBefore) return;
       confirmed = loaded;
       version = loadedVersion;
       groups = loaded;

@@ -304,6 +304,19 @@ describe('createGroups startLoad', () => {
     assert.deepEqual(groups.list, TWO);
   });
 
+  it('ignores a load that started while a change was saving, even when it comes back after', async () => {
+    const server = fakeServer();
+    const { groups } = groupsWith(server);
+    const saved = groups.save(TWO);
+    const apply = groups.startLoad();
+    server.pending[0].resolve();
+    await saved;
+    apply(ONE, 'v0');
+    assert.deepEqual(groups.list, TWO);
+    groups.save(THREE);
+    assert.equal(server.pending[1].version, 'v1');
+  });
+
   it('falls back to the loaded groups when a later change is refused', async () => {
     const server = fakeServer();
     const { groups } = groupsWith(server);
