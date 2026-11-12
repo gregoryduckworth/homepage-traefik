@@ -278,6 +278,30 @@ test('a route\'s history that can\'t be loaded says why', async ({ page }) => {
   await expect(dialog.getByRole('img')).toBeHidden();
 });
 
+test.describe('a disabled route', () => {
+  // In the [value, options] form, as Playwright would read a bare list of two routers as one router and its options.
+  test.use({
+    routers: [[
+      { name: 'grafana@docker', rule: 'Host(`grafana.test`)', entryPoints: ['web'], status: 'enabled', service: 'grafana@docker' },
+      { name: 'old@docker', rule: 'Host(`old.test`)', entryPoints: ['web'], status: 'disabled', service: 'old@docker' },
+    ], { option: true }],
+  });
+
+  test('has no history in its details, as it\'s never checked', async ({ page }) => {
+    let asked = false;
+    await page.route('**/api/history/**', route => {
+      asked = true;
+      return route.continue();
+    });
+    await details(page, 'old').click();
+    const dialog = page.getByRole('dialog', { name: 'old' });
+    await expect(dialog.getByText('Not checked while the router is disabled')).toBeVisible();
+    await expect(dialog.getByText(/up (over|since)|No checks/)).toBeHidden();
+    await expect(dialog.getByRole('img')).toBeHidden();
+    expect(asked).toBe(false);
+  });
+});
+
 test('pressing / jumps to the search box', async ({ page }) => {
   await page.keyboard.press('/');
   await expect(page.getByRole('searchbox', { name: 'Search routes' })).toBeFocused();

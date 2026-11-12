@@ -4,7 +4,7 @@ import { getJson, post, putJson } from './api.js';
 import { $, el, closeOnBackdrop } from './dom.js';
 import { groupOf } from './groups.js';
 import { bucketKind, bucketLabel, historyText, stripLabel } from './history.js';
-import { addressOf, detailRows, displayName, isHidden, statusOf } from './routes.js';
+import { addressOf, detailRows, displayName, isChecked, isHidden, statusOf } from './routes.js';
 
 // `routeOf` finds a route the page lists by id, and `groups` returns the custom groups. `moveRoute` puts a route in
 // a group, or in none. `placeOf` returns the custom group a route is in and the ids of the routes the page lists in
@@ -84,7 +84,7 @@ export function createDetails({ routeOf, groups, moveRoute, placeOf, shiftRoute,
     // While a check runs the button stays focusable, so a keyboard user isn't thrown out of the dialog, but does
     // nothing.
     const busy = checking.has(route.id);
-    els.check.hidden = !route.url || route.status === 'disabled';
+    els.check.hidden = !isChecked(route);
     els.check.textContent = busy ? 'Checking…' : 'Check now';
     els.check.setAttribute('aria-disabled', String(busy));
     const error = checkError?.id === route.id ? checkError.message : null;
@@ -118,12 +118,11 @@ export function createDetails({ routeOf, groups, moveRoute, placeOf, shiftRoute,
   // Fetches the route's history when the panel opens and again after each new check, so it never shows another
   // route's, and an answer that arrives after the panel moved on is dropped. Routes the server never checks have none.
   async function showHistory(route) {
-    const checkable = Boolean(route.url) && route.protocol !== 'tcp';
     if (historyOf?.id !== route.id) {
       els.history.hidden = true;
       els.historyStrip.replaceChildren();
     }
-    if (!checkable) {
+    if (!isChecked(route)) {
       els.history.hidden = true;
       historyOf = null;
       return;
