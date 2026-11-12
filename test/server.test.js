@@ -397,9 +397,17 @@ describe('server health settings', () => {
     assert.equal(checked.length, before);
   });
 
-  it('does not check again when a save leaves the health settings as they were', async () => {
+  it('checks a route straight away when its check is turned back on, after its last result was dropped', async () => {
+    await putRoute({ health: { check: false } });
+    await store.refreshHealth();
+    assert.equal(store.getRoutesWithHealth()[0].health, null);
     await putRoute({ health: null });
     await until(() => checked.at(-1) === 'http://app.test');
+    const [route] = await routes();
+    assert.equal(route.health.url, 'http://app.test');
+  });
+
+  it('does not check again when a save leaves the health settings as they were', async () => {
     const before = checked.length;
     await putRoute({ name: 'App' });
     await new Promise(resolve => setTimeout(resolve, 20));

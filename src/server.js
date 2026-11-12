@@ -184,14 +184,15 @@ function createServer({ store, config, title, version = null, icons = { get: () 
     }
 
     // A change to how the route is checked is checked straight away, rather than at the next poll, so the page soon
-    // shows what the new check finds.
+    // shows what the new check finds. That includes turning the check back on, by when the route has no result at
+    // all. A route that isn't checked, such as one whose check was just turned off, is left alone by checkRoute.
     if (pathname.startsWith('/api/routes/')) {
       const id = pathParam(pathname, '/api/routes/');
       let custom = null;
       if (await put(req, res, 'the route', async body => ({ custom: custom = await config.saveRoute(id, body) }))) {
         events?.notify();
         const route = store.getRoutesWithHealth().find(r => r.id === id);
-        if (check && route?.health && !currentHealth(route, custom)) {
+        if (check && route && !currentHealth(route, custom)) {
           checkOnce(id).catch(err => console.error(`Checking ${id} after its health settings changed failed: ${err.message}`));
         }
       }
