@@ -243,13 +243,15 @@ Uses Node.js 24, the current LTS and the version in the image. Run `nvm use` to 
 ```sh
 TRAEFIK_API_URL=http://localhost:8080 npm run dev
 npm test                                   # unit tests, nothing to install
-npm run test:coverage                      # the same, reporting which lines they reach
+npm run test:coverage                      # the same, failing if coverage drops below its minimums, as CI runs it
 npm install && npx playwright install chromium
 npm run test:e2e                           # browser tests against a fake Traefik API
 npm run lint                               # ESLint, as CI runs it
 ```
 
 Playwright and ESLint are development dependencies only; the image doesn't include them.
+
+The coverage minimums (lines, branches and functions) are the `--test-coverage-*` flags in `package.json`'s `test:coverage` script, set a little below today's figures; raise them as coverage goes up. The totals include the page modules the unit tests import (`public/api.js`, `groups.js`, `routes.js`), but not those only the browser tests reach.
 
 ### Releasing
 
