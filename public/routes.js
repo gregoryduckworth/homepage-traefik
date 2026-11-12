@@ -46,6 +46,12 @@ export function displayName(route) {
   return route.custom?.name || route.name;
 }
 
+// Whether the server checks the route, as its isCheckable decides: disabled routes and those with no web address,
+// such as TCP routes, are never checked, so they can't be checked now and have no history.
+export function isChecked(route) {
+  return Boolean(route.url) && route.status !== 'disabled';
+}
+
 export function isHidden(route) {
   return Boolean(route.custom?.hidden);
 }

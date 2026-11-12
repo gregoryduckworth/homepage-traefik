@@ -2,7 +2,7 @@
 // Node has to work out that it's an ES module, which the test scripts don't warn about.
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { addressOf, byName, detailRows, displayName, groupKey, isHidden, matches, sectionsFor, statusOf } from '../public/routes.js';
+import { addressOf, byName, detailRows, displayName, groupKey, isChecked, isHidden, matches, sectionsFor, statusOf } from '../public/routes.js';
 
 function route(fields = {}) {
   return {
@@ -62,6 +62,20 @@ describe('displayName', () => {
   it('prefers a name set on the page over the router name', () => {
     assert.equal(displayName(route({ custom: { name: 'My app' } })), 'My app');
     assert.equal(displayName(route()), 'app');
+  });
+});
+
+describe('isChecked', () => {
+  it('is true for an enabled route with a web address', () => {
+    assert.equal(isChecked(route()), true);
+  });
+
+  it('is false for a disabled route', () => {
+    assert.equal(isChecked(route({ status: 'disabled' })), false);
+  });
+
+  it('is false for a route with no web address', () => {
+    assert.equal(isChecked(route({ url: null })), false);
   });
 });
 

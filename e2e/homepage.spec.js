@@ -240,6 +240,68 @@ test('a check that fails says why in the route\'s details', async ({ page }) => 
   await expect(dialog.getByRole('alert')).toHaveText('The route wasn’t checked. The homepage server hit an error');
 });
 
+test('a route\'s details show how it has done since the homepage started', async ({ page }) => {
+  await details(page, 'grafana').click();
+  const dialog = page.getByRole('dialog', { name: 'grafana' });
+  await expect(dialog.getByText(/^\d+(\.\d)?% up since /)).toBeVisible();
+  const strip = dialog.getByRole('img');
+  await expect(strip).toHaveAttribute('aria-label', /^(Checks failed|No checks failed)/);
+  await expect(strip.locator('span')).toHaveCount(48);
+});
+
+test('a route\'s history shows each half hour by how its checks went', async ({ page }) => {
+  const start = Date.parse('2026-01-01T12:30:00Z');
+  const counts = { 0: { checks: 30 }, 1: { checks: 30, down: 3 }, 2: { checks: 30, down: 30 } };
+  const buckets = Array.from({ length: 48 }, (_, i) => ({ start: new Date(start + i * 30 * 60000).toISOString(), checks: 0, warn: 0, down: 0, ...counts[i] }));
+  await page.route('**/api/history/**', route => route.fulfill({
+    json: { since: buckets[0].start, checks: 90, warn: 0, down: 33, uptime: 57 / 90, latencyMs: 41, bucketMinutes: 30, buckets },
+  }));
+  await details(page, 'grafana').click();
+  const dialog = page.getByRole('dialog', { name: 'grafana' });
+  await expect(dialog.getByText('63.3% up over the last 24 hours')).toBeVisible();
+  await expect(dialog.getByText('33 of 90 checks failed. Average response 41 ms.')).toBeVisible();
+  const segments = dialog.getByRole('img').locator('span');
+  await expect(segments.nth(0)).toHaveAttribute('data-kind', 'up');
+  await expect(segments.nth(1)).toHaveAttribute('data-kind', 'warn');
+  await expect(segments.nth(2)).toHaveAttribute('data-kind', 'down');
+  await expect(segments.nth(3)).toHaveAttribute('data-kind', 'none');
+  // The two half hours with failures run together into one period.
+  await expect(dialog.getByRole('img')).toHaveAttribute('aria-label', /^Checks failed (?!.* and ).+ to .+$/);
+});
+
+test('a route\'s history that can\'t be loaded says why', async ({ page }) => {
+  await page.route('**/api/history/**', route => route.fulfill({ status: 500, json: { error: 'The homepage server hit an error' } }));
+  await details(page, 'grafana').click();
+  const dialog = page.getByRole('dialog', { name: 'grafana' });
+  await expect(dialog.getByText('Couldn’t load how this route has done over the last day')).toBeVisible();
+  await expect(dialog.getByText('The homepage server hit an error')).toBeVisible();
+  await expect(dialog.getByRole('img')).toBeHidden();
+});
+
+test.describe('a disabled route', () => {
+  // In the [value, options] form, as Playwright would read a bare list of two routers as one router and its options.
+  test.use({
+    routers: [[
+      { name: 'grafana@docker', rule: 'Host(`grafana.test`)', entryPoints: ['web'], status: 'enabled', service: 'grafana@docker' },
+      { name: 'old@docker', rule: 'Host(`old.test`)', entryPoints: ['web'], status: 'disabled', service: 'old@docker' },
+    ], { option: true }],
+  });
+
+  test('has no history in its details, as it\'s never checked', async ({ page }) => {
+    let asked = false;
+    await page.route('**/api/history/**', route => {
+      asked = true;
+      return route.continue();
+    });
+    await details(page, 'old').click();
+    const dialog = page.getByRole('dialog', { name: 'old' });
+    await expect(dialog.getByText('Not checked while the router is disabled')).toBeVisible();
+    await expect(dialog.getByText(/up (over|since)|No checks/)).toBeHidden();
+    await expect(dialog.getByRole('img')).toBeHidden();
+    expect(asked).toBe(false);
+  });
+});
+
 test('pressing / jumps to the search box', async ({ page }) => {
   await page.keyboard.press('/');
   await expect(page.getByRole('searchbox', { name: 'Search routes' })).toBeFocused();

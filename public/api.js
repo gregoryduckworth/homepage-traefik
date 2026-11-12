@@ -6,6 +6,10 @@ async function send(url, init) {
   return reply;
 }
 
+export function getJson(url) {
+  return send(url);
+}
+
 export function putJson(url, body, headers = {}) {
   return send(url, { method: 'PUT', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 }

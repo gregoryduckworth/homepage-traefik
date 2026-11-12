@@ -7,7 +7,8 @@ const DUE_SLACK_MS = 2000;
 
 // The routes Traefik serves and the latest health check of each, refreshed by the server's poll. `auth` is the
 // username and password for the Traefik API, if it needs them; they can also be in `traefikUrl`, but are taken out of
-// it either way, so no error shows them. `checkRoutes` and `now` are only replaced in tests.
+// it either way, so no error shows them. `history`, when given, is told every check, as createHistory's is.
+// `checkRoutes` and `now` are only replaced in tests.
 function createRouteStore({
   traefikUrl: rawTraefikUrl,
   auth: givenAuth = null,
@@ -16,6 +17,7 @@ function createRouteStore({
   checkRoutes = checkAllRoutes,
   healthOptions = {},
   healthIntervalMs = 0,
+  history = null,
   now = Date.now,
 }) {
   const { url: traefikUrl, auth: urlAuth } = splitApiUrl(rawTraefikUrl);
@@ -53,8 +55,9 @@ function createRouteStore({
   }
 
   // A check that started earlier, such as the poll's while someone asked for one on the page, can finish later, so
-  // it only replaces a result for the same URL if it isn't older.
+  // it only replaces a result for the same URL if it isn't older. The history keeps both.
   function setResult(route, result) {
+    history?.record(route.id, route.url, result);
     const last = healthResults.get(route.id);
     if (last?.url === route.url && Date.parse(last.checkedAt) > Date.parse(result.checkedAt)) return;
     healthResults.set(route.id, { ...result, url: route.url });
@@ -84,6 +87,7 @@ function createRouteStore({
     const kept = new Map(checkable.filter(route => healthResults.has(route.id)).map(route => [route.id, healthResults.get(route.id)]));
     const pruned = kept.size !== healthResults.size;
     healthResults = kept;
+    history?.prune();
     return due.length > 0 || pruned;
   }
 
