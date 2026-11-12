@@ -56,7 +56,10 @@ function readPasswordFile(file, readFile) {
 // `auth`, or null. TRAEFIK_API_USERNAME, TRAEFIK_API_PASSWORD_FILE and TRAEFIK_API_PASSWORD take the place of any in
 // the URL, and the file of the password variable.
 function readTraefikApi(env, { readFile = fs.readFileSync } = {}) {
-  const { url, auth: fromUrl } = splitApiUrl(env.TRAEFIK_API_URL || 'http://traefik:8080');
+  const raw = env.TRAEFIK_API_URL || 'http://traefik:8080';
+  const { url, auth: fromUrl } = splitApiUrl(raw);
+  // Only a URL that doesn't parse loses its credentials without returning them.
+  if (url !== raw && !fromUrl) console.warn(`TRAEFIK_API_URL=${url} isn't a valid http:// or https:// URL, so the username and password in it are ignored. Percent-encode any @, : or / in them, or set TRAEFIK_API_USERNAME and TRAEFIK_API_PASSWORD.`);
   const username = env.TRAEFIK_API_USERNAME || fromUrl?.username || '';
   let password;
   if (env.TRAEFIK_API_PASSWORD_FILE) {

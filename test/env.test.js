@@ -86,6 +86,22 @@ describe('readTraefikApi', () => {
   });
 });
 
+describe('readTraefikApi with credentials in a URL it cannot parse', () => {
+  it('warns that they are ignored without showing the password', t => {
+    t.mock.method(console, 'warn', () => {});
+    readTraefikApi({ TRAEFIK_API_URL: 'http://admin:s3/cret@traefik:8080' });
+    const warnings = console.warn.mock.calls.map(call => call.arguments[0]).join('\n');
+    assert.match(warnings, /TRAEFIK_API_URL=http:\/\/traefik:8080 isn't a valid http:\/\/ or https:\/\/ URL, so the username and password in it are ignored/);
+    assert.doesNotMatch(warnings, /s3|cret/);
+  });
+
+  it('does not warn about a URL without credentials', t => {
+    t.mock.method(console, 'warn', () => {});
+    readTraefikApi({ TRAEFIK_API_URL: 'http://traefik:8080' });
+    assert.equal(console.warn.mock.callCount(), 0);
+  });
+});
+
 describe('readSettings', () => {
   it('uses the defaults when nothing is set', () => {
     const settings = readSettings({});

@@ -61,7 +61,7 @@ secrets:
     file: ./traefik_api_password.txt
 ```
 
-The variables take the place of any username and password in the URL, and `TRAEFIK_API_PASSWORD_FILE` of `TRAEFIK_API_PASSWORD`. If Traefik answers with a 401 or 403, the notice at the top of the page says the username and password were refused.
+The variables take the place of any username and password in the URL, and `TRAEFIK_API_PASSWORD_FILE` of `TRAEFIK_API_PASSWORD`. If Traefik answers with a 401 or 403, the notice at the top of the page says so: that it refused the username and password, or, if none were given, that it asks for them.
 
 Which image tag to use:
 
