@@ -263,6 +263,8 @@ Run the **Release** workflow from the Actions tab, on `main`, and choose `patch`
 
 For the first release, choose `major` to get `1.0.0`. A commit that's already released can't be released again. Pushing a `v1.2.3` tag yourself still builds and publishes the image, but doesn't write a release.
 
+The git tag is the version. `package.json` stays at `0.0.0` and isn't bumped on release, since nothing reads it: the version at the foot of the page comes from the image. It's also marked `private`, so it can't be published to npm by mistake.
+
 ## License
 
 [MIT](LICENSE). The bundled font in `public/fonts` has its own licence, the SIL Open Font License, in [`public/fonts/OFL.txt`](public/fonts/OFL.txt).
