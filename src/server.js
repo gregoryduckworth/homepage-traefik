@@ -8,6 +8,7 @@ const { writeSafely, saveQuietly, readCache } = require('./files');
 const { readSettings } = require('./env');
 const { createRouteStore } = require('./routeStore');
 const { createPoller } = require('./poller');
+const { createHistory, parseSavedHistory } = require('./history');
 
 const PUBLIC_DIR = path.resolve(__dirname, '..', 'public');
 
@@ -132,8 +133,8 @@ function pathParam(pathname, prefix) {
 // /api/check/<id>, which checks a route and looks up its icon now rather than when they're next due; it resolves to
 // the route with its new health, or null when there's nothing to check. `readOnly` refuses every change to the groups
 // and routes with a 403, and tells the page so it can hide its editing controls; routes can still be checked, as
-// that saves nothing.
-function createServer({ store, config, title, version = null, icons = { get: () => null }, events = null, check = null, frameAncestors = "'self'", readOnly = false }) {
+// that saves nothing. `history`, when given, serves /api/history/<id>, how the route has done over the last day.
+function createServer({ store, config, title, version = null, icons = { get: () => null }, events = null, check = null, history = null, frameAncestors = "'self'", readOnly = false }) {
   // Checks under way, by route id, so a route asked for again from another page waits for the same check.
   const checks = new Map();
 
@@ -200,6 +201,14 @@ function createServer({ store, config, title, version = null, icons = { get: () 
       return;
     }
 
+    // Only for routes Traefik serves now, though a route that's just come back keeps the history it had.
+    if (pathname.startsWith('/api/history/') && history) {
+      const id = pathParam(pathname, '/api/history/');
+      if (store.state.routes.some(route => route.id === id)) sendJson(res, 200, history.summary(id));
+      else sendJson(res, 404, { error: 'There’s no route by that name' });
+      return;
+    }
+
     if (pathname.startsWith('/api/icons/')) {
       sendIcon(res, icons.get(pathParam(pathname, '/api/icons/')));
       return;
@@ -254,20 +263,25 @@ function shutDown({ server, events = null, graceMs = 1000 }) {
 // Starts the homepage as `env` sets it up: serves the page, and polls Traefik until it's stopped.
 async function main(env) {
   const { port, frameAncestors, readOnly, traefikUrl, traefikAuth, pollSeconds, healthSeconds, title, version, entryPointPorts, configFile, healthOptions } = readSettings(env);
-  // Icons found on the sites are saved beside the config file, so a restart shows them straight away.
+  // Icons found on the sites are saved beside the config file, so a restart shows them straight away. So is each
+  // route's history, but only as the server stops, so the SD card isn't written every time a route is checked.
   const iconsFile = path.join(path.dirname(configFile), 'icons.json');
+  const historyFile = path.join(path.dirname(configFile), 'history.json');
   const config = createConfigStore({ file: configFile });
   const events = createEvents();
   const savedIcons = await readCache(iconsFile, parseSavedIcons);
+  const savedHistory = await readCache(historyFile, parseSavedHistory);
 
-  const store = createRouteStore({ traefikUrl, auth: traefikAuth, fetchImpl: fetch, entryPointPorts, healthOptions, healthIntervalMs: healthSeconds * 1000 });
+  const history = createHistory({ intervalMs: healthSeconds * 1000, saved: savedHistory ?? new Map() });
+  const saveHistory = saveQuietly(`Saving route history to ${historyFile}`, () => writeSafely(historyFile, history.serialize()));
+  const store = createRouteStore({ traefikUrl, auth: traefikAuth, fetchImpl: fetch, entryPointPorts, healthOptions, healthIntervalMs: healthSeconds * 1000, history });
   // Icons are looked up even for routes with one set in the config file, so the page can fall back to the
   // site's own icon if that one doesn't load.
   const icons = createIconStore({ options: healthOptions, saved: savedIcons ?? new Map(), onChange: events.notify });
   const saveIcons = saveQuietly(`Saving icons to ${iconsFile}`, () => writeSafely(iconsFile, icons.serialize()));
   const { poll, check } = createPoller({ store, icons, events, saveIcons });
 
-  const server = createServer({ store, config, title, version, icons, events, check, frameAncestors, readOnly });
+  const server = createServer({ store, config, title, version, icons, events, check, history, frameAncestors, readOnly });
   // Polling only starts once the server is listening. A port it can't listen on, such as one already in use, ends
   // it with a sentence rather than Node's stack trace.
   server.once('error', err => {
@@ -282,7 +296,7 @@ async function main(env) {
     setInterval(poll, pollSeconds * 1000).unref();
   });
   for (const signal of ['SIGINT', 'SIGTERM']) {
-    process.on(signal, () => shutDown({ server, events }).then(() => process.exit(0)));
+    process.on(signal, () => Promise.all([shutDown({ server, events }), saveHistory()]).then(() => process.exit(0)));
   }
 }
 

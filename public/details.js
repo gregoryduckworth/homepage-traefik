@@ -1,8 +1,9 @@
-// A route's details panel, from which it can be checked, moved to a group or up and down within one, hidden or shown,
-// and given its own name and icon in a dialog of its own.
-import { post, putJson } from './api.js';
+// A route's details panel, which shows how the route has done over the last day, and from which it can be checked,
+// moved to a group or up and down within one, hidden or shown, and given its own name and icon in a dialog of its own.
+import { getJson, post, putJson } from './api.js';
 import { $, el, closeOnBackdrop } from './dom.js';
 import { groupOf } from './groups.js';
+import { bucketKind, bucketLabel, historyText, stripLabel } from './history.js';
 import { addressOf, detailRows, displayName, isHidden, statusOf } from './routes.js';
 
 // `routeOf` finds a route the page lists by id, and `groups` returns the custom groups. `moveRoute` puts a route in
@@ -29,6 +30,11 @@ export function createDetails({ routeOf, groups, moveRoute, placeOf, shiftRoute,
     routeIcon: $('route-icon'),
     routeError: $('route-error'),
     routeSubmit: $('route-submit'),
+    history: $('details-history'),
+    uptime: $('details-uptime'),
+    historyDetail: $('details-history-detail'),
+    historyStrip: $('details-history-strip'),
+    historyAxis: $('details-history-axis'),
   };
   closeOnBackdrop(els.details);
   closeOnBackdrop(els.routeDialog);
@@ -39,6 +45,8 @@ export function createDetails({ routeOf, groups, moveRoute, placeOf, shiftRoute,
   const checking = new Set();
   let checkError = null;
   let hideError = null;
+  // The route and check the history shown is up to date with, as { id, checkedAt }.
+  let historyOf = null;
 
   function fill(route) {
     const status = statusOf(route);
@@ -83,6 +91,8 @@ export function createDetails({ routeOf, groups, moveRoute, placeOf, shiftRoute,
     els.checkError.textContent = error;
     els.checkError.hidden = !error;
 
+    showHistory(route);
+
     const open = $('details-open');
     open.hidden = !route.url;
     if (route.url) {
@@ -91,10 +101,56 @@ export function createDetails({ routeOf, groups, moveRoute, placeOf, shiftRoute,
     }
   }
 
+  function drawHistory(summary) {
+    const { headline, detail } = historyText(summary);
+    els.uptime.textContent = headline;
+    els.historyDetail.textContent = detail;
+    els.historyStrip.replaceChildren(...summary.buckets.map(bucket => {
+      const segment = el('span');
+      segment.dataset.kind = bucketKind(bucket);
+      segment.title = bucketLabel(bucket, summary.bucketMinutes);
+      return segment;
+    }));
+    els.historyStrip.setAttribute('aria-label', stripLabel(summary));
+    els.historyStrip.hidden = els.historyAxis.hidden = false;
+  }
+
+  // Fetches the route's history when the panel opens and again after each new check, so it never shows another
+  // route's, and an answer that arrives after the panel moved on is dropped. Routes the server never checks have none.
+  async function showHistory(route) {
+    const checkable = Boolean(route.url) && route.protocol !== 'tcp';
+    if (historyOf?.id !== route.id) {
+      els.history.hidden = true;
+      els.historyStrip.replaceChildren();
+    }
+    if (!checkable) {
+      els.history.hidden = true;
+      historyOf = null;
+      return;
+    }
+    const checkedAt = route.health?.checkedAt ?? null;
+    if (historyOf?.id === route.id && historyOf.checkedAt === checkedAt) return;
+    const asked = historyOf = { id: route.id, checkedAt };
+    try {
+      const summary = await getJson(`api/history/${encodeURIComponent(route.id)}`);
+      if (historyOf !== asked) return;
+      drawHistory(summary);
+    } catch (err) {
+      if (historyOf !== asked) return;
+      els.uptime.textContent = 'Couldn’t load how this route has done over the last day';
+      els.historyDetail.textContent = err.message;
+      els.historyStrip.hidden = els.historyAxis.hidden = true;
+      // Tried again the next time the panel updates.
+      historyOf = { id: route.id, checkedAt: undefined };
+    }
+    els.history.hidden = false;
+  }
+
   function open(id) {
     const route = routeOf(id);
     if (!route) return;
     detailsId = id;
+    historyOf = null;
     if (checkError?.id !== id) checkError = null;
     els.moved.textContent = '';
     fill(route);

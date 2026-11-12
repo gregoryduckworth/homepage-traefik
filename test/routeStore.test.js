@@ -1,6 +1,7 @@
 const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const { createRouteStore } = require('../src/routeStore');
+const { createHistory } = require('../src/history');
 
 function jsonResponse(body) {
   return { ok: true, status: 200, headers: new Headers(), json: async () => body };
@@ -118,6 +119,27 @@ describe('createRouteStore health checks', () => {
     await store.refresh();
     await store.refreshHealth();
     assert.deepEqual(checked, [['a@docker', 'b@docker'], ['b@docker']]);
+  });
+
+  it('adds each check to the history', async () => {
+    const history = createHistory({ intervalMs: HOUR, now: () => clock });
+    const store = makeStore({ history });
+    await store.refresh();
+    await store.refreshHealth();
+    clock += HOUR;
+    await store.checkRoute('a@docker');
+    assert.equal(history.summary('a@docker').checks, 2);
+  });
+
+  it('keeps the history of a route Traefik stops serving for a moment', async () => {
+    const history = createHistory({ intervalMs: HOUR, now: () => clock });
+    const store = makeStore({ history });
+    await store.refresh();
+    await store.refreshHealth();
+    routers.pop();
+    await store.refresh();
+    await store.refreshHealth();
+    assert.equal(history.summary('b@docker').checks, 1);
   });
 
   it('checks nothing while Traefik has not answered yet', async () => {

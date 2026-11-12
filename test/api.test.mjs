@@ -1,7 +1,8 @@
-// The page's requests to its server. They run in the browser, but newestOnly needs nothing from it.
+// The page's requests to its server. They run in the browser, but need nothing from it apart from fetch, which the
+// tests stand in for.
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { newestOnly } from '../public/api.js';
+import { getJson, newestOnly } from '../public/api.js';
 
 // A task whose calls the test settles by hand, in any order.
 function deferredTask() {
@@ -69,5 +70,17 @@ describe('newestOnly', () => {
     await newer;
     calls[0].resolve('old');
     assert.equal(await older, null);
+  });
+});
+
+describe('getJson', () => {
+  it('resolves to the server\'s reply', async t => {
+    t.mock.method(globalThis, 'fetch', async () => ({ ok: true, status: 200, json: async () => ({ checks: 3 }) }));
+    assert.deepEqual(await getJson('api/history/app'), { checks: 3 });
+  });
+
+  it('throws with the reason the server gives for refusing', async t => {
+    t.mock.method(globalThis, 'fetch', async () => ({ ok: false, status: 404, json: async () => ({ error: 'There’s no route by that name' }) }));
+    await assert.rejects(getJson('api/history/gone'), { message: 'There’s no route by that name' });
   });
 });

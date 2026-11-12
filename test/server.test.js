@@ -11,6 +11,7 @@ const { createServer, shutDown } = require('../src/server');
 const { createRouteStore } = require('../src/routeStore');
 const { createConfigStore } = require('../src/config');
 const { createEvents } = require('../src/events');
+const { createHistory } = require('../src/history');
 
 function jsonResponse(body) {
   return { ok: true, status: 200, headers: new Headers(), json: async () => body };
@@ -601,5 +602,102 @@ describe('a Traefik API behind basic auth', () => {
     assert.match(output, /refused the username and password \(HTTP 401\)/);
     assert.doesNotMatch(output, /s3cret/);
     assert.equal(requests[0], authorization);
+  });
+});
+
+describe('server history', () => {
+  async function serve(t, history) {
+    const store = createRouteStore({ traefikUrl: 'http://traefik:8080', fetchImpl: async url => routersResponse(url, [{ name: 'app@docker', rule: 'Host(`app.test`)' }]) });
+    await store.refresh();
+    const config = { read: async () => ({ groups: [], routes: {}, error: null }) };
+    const server = createServer({ store, config, title: 'Lab', history });
+    await new Promise(resolve => server.listen(0, resolve));
+    t.after(() => server.close());
+    return `http://127.0.0.1:${server.address().port}`;
+  }
+
+  it('serves how a route has done over the last day', async t => {
+    const history = createHistory();
+    history.record('app@docker', 'http://app.test', { reachable: true, statusCode: 200, latencyMs: 12, checkedAt: new Date().toISOString() });
+    const base = await serve(t, history);
+    const res = await fetch(`${base}/api/history/app%40docker`);
+    assert.equal(res.status, 200);
+    assert.equal((await res.json()).checks, 1);
+  });
+
+  it('answers with a 404 for a route Traefik isn\'t serving', async t => {
+    const base = await serve(t, createHistory());
+    const res = await fetch(`${base}/api/history/gone%40docker`);
+    assert.equal(res.status, 404);
+    assert.equal((await res.json()).error, 'There’s no route by that name');
+  });
+});
+
+describe('saving route history', () => {
+  // A homepage reading one route, app@docker, from a fake Traefik, with its config folder in `dir`. Its checks are
+  // pinned to this machine and given a second at most; whether they pass doesn't matter, only that they're kept.
+  async function startHomepage(t, dir) {
+    const traefik = http.createServer((req, res) => {
+      const routers = req.url.startsWith('/api/http/routers') ? [{ name: 'app@docker', rule: 'Host(`app.test`)', status: 'enabled' }] : [];
+      res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(routers));
+    });
+    await new Promise(resolve => traefik.listen(0, '127.0.0.1', resolve));
+    const free = net.createServer();
+    await new Promise(resolve => free.listen(0, '127.0.0.1', resolve));
+    const { port } = free.address();
+    await new Promise(resolve => free.close(resolve));
+    const child = spawn(process.execPath, [path.join(__dirname, '..', 'src', 'server.js')], {
+      env: {
+        ...process.env,
+        PORT: String(port),
+        TRAEFIK_API_URL: `http://127.0.0.1:${traefik.address().port}`,
+        CONFIG_FILE: path.join(dir, 'homepage.json'),
+        HEALTHCHECK_ADDRESS: '127.0.0.1',
+        HEALTHCHECK_TIMEOUT_SECONDS: '1',
+      },
+      stdio: 'ignore',
+    });
+    t.after(() => {
+      child.kill();
+      traefik.close();
+    });
+    // The checks a route has in its history, once the homepage knows the route.
+    const checks = async () => {
+      for (;;) {
+        const res = await fetch(`http://127.0.0.1:${port}/api/history/app%40docker`).catch(() => null);
+        if (res?.ok) {
+          const { checks: count } = await res.json();
+          if (count) return count;
+        }
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+    };
+    return { child, checks };
+  }
+
+  async function tempDir(t) {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'homepage-history-'));
+    t.after(() => fs.rm(dir, { recursive: true, force: true }));
+    return dir;
+  }
+
+  it('saves each route\'s history as the server stops', { timeout: 10000 }, async t => {
+    const dir = await tempDir(t);
+    const { child, checks } = await startHomepage(t, dir);
+    await checks();
+    child.kill('SIGTERM');
+    const [code] = await once(child, 'exit');
+    assert.equal(code, 0);
+    const saved = JSON.parse(await fs.readFile(path.join(dir, 'history.json'), 'utf8'));
+    assert.deepEqual(Object.keys(saved.routes), ['app@docker']);
+  });
+
+  it('starts with the history an earlier run saved', { timeout: 10000 }, async t => {
+    const dir = await tempDir(t);
+    const earlier = createHistory();
+    for (let i = 3; i > 0; i--) earlier.record('app@docker', 'http://app.test', { reachable: true, statusCode: 200, latencyMs: 5, checkedAt: new Date(Date.now() - i * 60000).toISOString() });
+    await fs.writeFile(path.join(dir, 'history.json'), earlier.serialize());
+    const { checks } = await startHomepage(t, dir);
+    assert.ok(await checks() >= 3);
   });
 });

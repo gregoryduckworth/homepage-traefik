@@ -537,6 +537,43 @@ a.tile-link:hover .tile-name { color: var(--accent); }
   font: 0.875rem/1.4 ui-monospace, "SF Mono", Menlo, monospace;
 }
 
+/* The last day in half hours, drawn like the strip at the top of the page but tall enough to hover each one. */
+.details-history {
+  margin: 0 1.25rem;
+  padding: 1rem 0;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.details-uptime { margin: 0; font-weight: 700; }
+.details-history-detail { margin: 0.125rem 0 0.75rem; color: var(--muted); }
+.details-history-detail:empty { display: none; }
+
+.history-strip {
+  display: flex;
+  gap: 1px;
+  height: 1.5rem;
+}
+
+.history-strip span {
+  flex: 1;
+  background: var(--hairline);
+  border-radius: 1px;
+}
+
+.history-strip [data-kind="up"] { background: var(--up); }
+.history-strip [data-kind="warn"] { background: var(--warn); }
+.history-strip [data-kind="down"] { background: var(--down); }
+
+.history-axis {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 0.25rem;
+  font-size: 0.8125rem;
+  color: var(--muted);
+}
+
+.history-strip[hidden], .history-axis[hidden] { display: none; }
+
 .details-open {
   display: block;
   margin: 0 1.25rem 1.25rem;

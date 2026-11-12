@@ -133,7 +133,7 @@ How a router is shown:
 
 ## Health checks
 
-Each enabled route with a link is checked once per `HEALTHCHECK_INTERVAL_SECONDS` with a `HEAD` request, retried once with `GET` if that fails with a 5xx, a timeout or a reset. Checks run when Traefik is polled, so the interval is rounded up to a whole number of polls: with the defaults (`POLL_INTERVAL_SECONDS=30`, `HEALTHCHECK_INTERVAL_SECONDS=60`) each route is checked every 60 seconds, and a 45-second interval also works out at every 60 seconds. Results are only kept in memory, so after a restart routes show as **Checking** until the first checks finish, a few seconds later. A strip across the top shows every route at a glance, and the info button on each route opens a details panel. The panel explains a failure in a sentence, for example "Connected to 172.18.0.2:443, but it didn't send a response within 10 seconds". Select **Check now** in the panel to check the route and look up its icon straight away, say after fixing it, rather than waiting for the next check.
+Each enabled route with a link is checked once per `HEALTHCHECK_INTERVAL_SECONDS` with a `HEAD` request, retried once with `GET` if that fails with a 5xx, a timeout or a reset. Checks run when Traefik is polled, so the interval is rounded up to a whole number of polls: with the defaults (`POLL_INTERVAL_SECONDS=30`, `HEALTHCHECK_INTERVAL_SECONDS=60`) each route is checked every 60 seconds, and a 45-second interval also works out at every 60 seconds. The latest results are only kept in memory, so after a restart routes show as **Checking** until the first checks finish, a few seconds later. A strip across the top shows every route at a glance, and the info button on each route opens a details panel. The panel shows how the route has done over the last 24 hours: the share of checks that didn't fail, how many did, its average response time, and a strip of half hours, green where every check answered, amber where some failed or reached Traefik but no router, red where all failed and grey where there were none. So a route that was down at 3am, or fails one check in five, stands out even when its latest check passed. Hover over a half hour to see its counts. The panel also explains a failure in a sentence, for example "Connected to 172.18.0.2:443, but it didn't send a response within 10 seconds". Select **Check now** in the panel to check the route and look up its icon straight away, say after fixing it, rather than waiting for the next check.
 
 | Status                     | Meaning                                                                                                                            |
 | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
@@ -210,12 +210,13 @@ Mount a folder at `/app/config` so your settings survive upgrades:
       - ./config:/app/config
 ```
 
-The server keeps two files there:
+The server keeps three files there:
 
 | File            | What's in it                                      | Back it up?             |
 | --------------- | ------------------------------------------------- | ----------------------- |
 | `homepage.json` | Your groups, names, icons and hidden routes       | Yes                     |
 | `icons.json`    | Icons found on your sites                         | No, it's only a cache   |
+| `history.json`  | Each route's checks over the last 24 hours        | No, it's only a cache   |
 
 `homepage.json` is only written when you change something on the page, so it's safe to keep in git. Older versions also kept a `health.json` there; it's no longer used, so you can delete it.
 
@@ -240,14 +241,17 @@ Routes are identified by their full router name, shown as **Router** in the deta
 
 ### Disk writes and SD cards
 
-The homepage is meant to run on a Raspberry Pi without wearing out its SD card. Health checks and icon lookups are network requests, and health results are only kept in memory, so the only writes are to the two files above:
+The homepage is meant to run on a Raspberry Pi without wearing out its SD card. Health checks and icon lookups are network requests, and health results are kept in memory, so the only writes are to the three files above:
 
 | File            | When it's written                                                                                                                          |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
 | `homepage.json` | Only when you change something on the page; saving without changing anything writes nothing                                                |
 | `icons.json`    | Only when an icon is found, changes to a different image, or its route goes away; a daily re-check that finds the same icon writes nothing |
+| `history.json`  | Only when the server stops, as on `docker stop` or an upgrade; it's read back when it starts                                               |
 
 Each save writes a temporary file and renames it over the old one, so a power cut can't leave half a file.
+
+Saving the history only on the way out means a running homepage never writes it, but a power cut or crash loses the checks since the last stop, and the panel then starts counting again from the next check. The history takes about 10 KB of memory per route at the default interval (seven bytes a check), and up to six times that at the shortest, 10 seconds. A route Traefik stops serving keeps its history for a day, so one whose container is only being recreated doesn't lose it. If you run a read-only and an editable homepage on the same config folder, each keeps its own history, and whichever stops last saves it.
 
 Apart from one line at startup, the server only logs when something goes wrong. If Traefik can't be reached, it logs that when it happens and whenever the error changes, not on every poll, then logs one line such as `Reading routes from http://traefik:8080 again` when it answers, so the log shows how long the outage lasted.
 
@@ -264,12 +268,15 @@ Docker keeps container logs on disk, so a size limit such as `logging: { driver:
 | `PUT /api/routes/<router name>` | Set any of `{"name": "...", "icon": "...", "hidden": true}`. Empty or `false` clears; omitted fields are kept |
 | `GET /api/icons/<router name>`  | The icon found on the route's site                                                                             |
 | `POST /api/check/<router name>` | Check the route and look up its icon now. Replies with its new `health` once both are done                     |
+| `GET /api/history/<router name>` | How the route has done over the last 24 hours (see below)                                                     |
 | `GET /api/events`               | Server-sent events, one message whenever anything on the page changes                                          |
 | `GET /healthz`                  | Liveness check                                                                                                 |
 
 `PUT` bodies, and `POST` requests, are sent as `application/json`.
 
 On a [read-only](#sharing-the-page-read-only) homepage, `GET /api/routes` includes `"readOnly": true` and both `PUT` endpoints answer with a `403`. `POST /api/check/<router name>` still works, as it saves nothing.
+
+`GET /api/history/<router name>` answers with `checks`, the number of failed (`down`) and warning (`warn`, Traefik's own 404) checks, `uptime` (the share that didn't fail, from 0 to 1), the average `latencyMs` of those that answered, `since` (the oldest check counted), and `buckets`: 48 half hours, oldest first, each with its `start`, `checks`, `warn` and `down`. Half hours start on the clock's half hours, and the last is the one under way. `uptime`, `latencyMs` and `since` are `null` before the first check. It answers with a `404` for a router Traefik isn't serving.
 
 The page sends `If-Match` with every group change, so a change made on a page that missed one saved elsewhere, say because its connection dropped, doesn't silently undo it. The page says the change wasn't saved and shows the groups as they are now. `groupsVersion` only changes when the groups do: renaming, hiding or giving an icon to a route leaves it alone.
 
