@@ -505,6 +505,19 @@ describe('createIconStore', () => {
       ]);
     });
 
+    it('gives a reason when the error has no message of its own, as connecting to several addresses does', async () => {
+      found = null;
+      const store = makeStore();
+      failure = Object.assign(new AggregateError([Object.assign(new Error('connect ECONNREFUSED ::1:1'), { code: 'ECONNREFUSED' })], ''), { code: 'ECONNREFUSED' });
+      await store.refresh([route('a')]);
+      failure = Object.assign(new AggregateError([], ''), { code: 'ETIMEDOUT' });
+      await store.refresh([route('b')]);
+      assert.deepEqual(logged.map(([, line]) => line), [
+        'No icon for a at http://a.test: connect ECONNREFUSED ::1:1',
+        'No icon for b at http://b.test: ETIMEDOUT',
+      ]);
+    });
+
     it('says nothing when a route that has an icon fails briefly and keeps it', async () => {
       const store = makeStore();
       await store.refresh([route('a')]);

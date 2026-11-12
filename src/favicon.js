@@ -195,6 +195,12 @@ async function load(url, opts) {
   return (await get(url, { ...opts, maxBytes: MAX_ICON_BYTES })).body;
 }
 
+// What went wrong, never blank. Connecting to a name with several addresses, such as localhost, fails with an
+// AggregateError whose own message is empty, so the first address's error or the code stands in for it.
+function reasonOf(err) {
+  return err?.message || err?.errors?.[0]?.message || err?.code || String(err);
+}
+
 // How a reason names an icon's URL: one inlined in the page could be kilobytes long.
 function nameOf(url) {
   return url.startsWith('data:') ? 'an icon inlined in the page' : url;
@@ -214,7 +220,7 @@ async function findIcon(pageUrl, { timeoutMs = DEFAULT_TIMEOUT_MS, address, look
   } catch (err) {
     // No response at all means /favicon.ico won't get one either; an HTTP error page may still have a favicon beside it.
     if (!err.status) throw err;
-    problems.push(`the page: ${err.message}`);
+    problems.push(`the page: ${reasonOf(err)}`);
   }
   const linked = candidates.length > 0;
   candidates.push(new URL('/favicon.ico', pageUrl).href);
@@ -225,7 +231,7 @@ async function findIcon(pageUrl, { timeoutMs = DEFAULT_TIMEOUT_MS, address, look
       if (icon) return icon;
       problems.push(`${nameOf(url)} isn't an image`);
     } catch (err) {
-      if (err.status !== 404) problems.push(`${nameOf(url)}: ${err.message}`);
+      if (err.status !== 404) problems.push(`${nameOf(url)}: ${reasonOf(err)}`);
     }
   }
   if (problems.length) throw new Error(problems[0]);
@@ -319,7 +325,7 @@ function createIconStore({
       return null;
     }
     if (!failure) return null;
-    const line = `No icon for ${route.id} at ${route.url}: ${failure.message}`;
+    const line = `No icon for ${route.id} at ${route.url}: ${reasonOf(failure)}`;
     if (line !== previous?.reported) (failure.missing ? console.log : console.warn)(line);
     return line;
   }
