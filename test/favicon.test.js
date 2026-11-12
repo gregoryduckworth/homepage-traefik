@@ -1,4 +1,4 @@
-const { describe, it, after, beforeEach } = require('node:test');
+const { describe, it, after, beforeEach, afterEach, mock } = require('node:test');
 const assert = require('node:assert/strict');
 const dns = require('node:dns');
 const http = require('node:http');
@@ -183,14 +183,14 @@ describe('findIcon', () => {
     });
 
     it('does not follow a redirect to another subdomain, such as a login page', async () => {
-      assert.equal(await iconAfterRedirect('app.test', 'login.app.test'), null);
+      await assert.rejects(iconAfterRedirect('app.test', 'login.app.test'), { message: /^the page: HTTP 302 redirect to another site, http:\/\/login\.app\.test:\d+$/ });
     });
   });
 
   it('does not follow a redirect to another host, such as a login page', async () => {
     const login = await site({ '/': page('<link rel="icon" href="/login.png">'), '/login.png': { body: PNG }, '/favicon.ico': { body: ICO } });
     const base = await site({ '/': { redirect: `${login.replace('127.0.0.1', 'localhost')}/` }, '/favicon.ico': { redirect: `${login.replace('127.0.0.1', 'localhost')}/favicon.ico` } });
-    assert.equal(await findIcon(`${base}/`, { timeoutMs: TIMEOUT_MS }), null);
+    await assert.rejects(findIcon(`${base}/`, { timeoutMs: TIMEOUT_MS }), { message: /^the page: HTTP 302 redirect to another site, http:\/\/localhost:\d+$/ });
   });
 
   it('still tries /favicon.ico when the page answers with an error', async () => {
@@ -204,7 +204,40 @@ describe('findIcon', () => {
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
     const { port } = server.address();
     await new Promise(resolve => server.close(resolve));
-    assert.equal(await findIcon(`http://127.0.0.1:${port}/`, { timeoutMs: TIMEOUT_MS }), null);
+    await assert.rejects(findIcon(`http://127.0.0.1:${port}/`, { timeoutMs: TIMEOUT_MS }), { code: 'ECONNREFUSED' });
+  });
+
+  it('says when the site simply has no icon', async () => {
+    const base = await site({ '/': page('<title>App</title>') });
+    await assert.rejects(findIcon(`${base}/`, { timeoutMs: TIMEOUT_MS }), {
+      message: "the page links to no icon and /favicon.ico isn't there (HTTP 404)",
+      missing: true,
+    });
+  });
+
+  it('says when the icons the page links to are missing too', async () => {
+    const base = await site({ '/': page('<link rel="icon" href="/gone.png">') });
+    await assert.rejects(findIcon(`${base}/`, { timeoutMs: TIMEOUT_MS }), { missing: true, message: /^none of the icons the page links to/ });
+  });
+
+  it('reports the best icon that went wrong rather than a missing /favicon.ico', async () => {
+    const base = await site({
+      '/': page('<link rel="icon" href="/broken.png"><link rel="icon" href="data:text/plain,hello">'),
+      '/broken.png': { type: 'image/png', body: '<html>Sign in</html>' },
+    });
+    const err = await findIcon(`${base}/`, { timeoutMs: TIMEOUT_MS }).catch(e => e);
+    assert.equal(err.message, `${base}/broken.png isn't an image`);
+    assert.equal(err.missing, undefined);
+  });
+
+  it('names an inlined icon rather than repeating its data: URL', async () => {
+    const base = await site({ '/': page('<link rel="icon" href="data:text/plain,hello">') });
+    await assert.rejects(findIcon(`${base}/`, { timeoutMs: TIMEOUT_MS }), { message: "an icon inlined in the page isn't an image" });
+  });
+
+  it('reports an error page that has no /favicon.ico beside it', async () => {
+    const base = await site({ '/': { status: 401, type: 'text/html', body: 'Unauthorized' } });
+    await assert.rejects(findIcon(`${base}/`, { timeoutMs: TIMEOUT_MS }), { message: 'the page: HTTP 401' });
   });
 
   it('connects to the given address while asking for the route by its own hostname', async () => {
@@ -221,10 +254,15 @@ describe('createIconStore', () => {
   let clock;
   let lookups;
   let found;
+  // Why the fake lookup finds nothing, when `found` is null.
+  let failure;
+  // What the store logged, in order, as [level, line].
+  let logged;
 
   function makeStore(options = {}) {
     const find = async url => {
       lookups.push(url);
+      if (!found) throw failure;
       return found;
     };
     return createIconStore({ find, now: () => clock, ...options });
@@ -238,7 +276,12 @@ describe('createIconStore', () => {
     clock = Date.parse('2026-01-01T00:00:00Z');
     lookups = [];
     found = { type: 'image/png', body: PNG, hash: 'abc' };
+    failure = new Error('No response within 10000 ms');
+    logged = [];
+    for (const level of ['log', 'warn', 'error']) mock.method(console, level, line => logged.push([level, line]));
   });
+
+  afterEach(() => mock.restoreAll());
 
   it('looks up icons for reachable routes and serves what it found', async () => {
     const store = makeStore();
@@ -410,6 +453,107 @@ describe('createIconStore', () => {
     assert.deepEqual([...saved.keys()], ['a']);
     const { url, checkedAt, icon } = saved.get('a');
     assert.deepEqual([url, checkedAt, icon.type, icon.body], ['http://a.test', clock, 'image/png', PNG]);
+  });
+
+  describe('logging', () => {
+    const missing = () => Object.assign(new Error("the page links to no icon and /favicon.ico isn't there (HTTP 404)"), { missing: true });
+
+    it('says once why a lookup keeps failing, again when the reason changes, and once when an icon turns up', async () => {
+      found = null;
+      const store = makeStore();
+      for (let i = 0; i < 3; i++) {
+        await store.refresh([route('a')]);
+        clock += HOUR;
+      }
+      assert.deepEqual(logged, [['warn', 'No icon for a at http://a.test: No response within 10000 ms']]);
+
+      failure = new Error('http://a.test/favicon.ico: Larger than 262144 bytes');
+      for (let i = 0; i < 3; i++) {
+        await store.refresh([route('a')]);
+        clock += HOUR;
+      }
+      assert.equal(logged.length, 2);
+      assert.deepEqual(logged[1], ['warn', 'No icon for a at http://a.test: http://a.test/favicon.ico: Larger than 262144 bytes']);
+
+      found = { type: 'image/png', body: PNG, hash: 'abc' };
+      await store.refresh([route('a')]);
+      clock += 24 * HOUR;
+      await store.refresh([route('a')]);
+      assert.deepEqual(logged.slice(2), [['log', 'Found an icon for a at http://a.test']]);
+      assert.equal(lookups.length, 8);
+    });
+
+    it('logs a site that simply has no icon once, as information rather than a warning', async () => {
+      found = null;
+      failure = missing();
+      const store = makeStore();
+      for (let i = 0; i < 3; i++) {
+        await store.refresh([route('a')]);
+        clock += HOUR;
+      }
+      assert.deepEqual(logged, [['log', "No icon for a at http://a.test: the page links to no icon and /favicon.ico isn't there (HTTP 404)"]]);
+    });
+
+    it('says so again when the route moves to a URL that fails the same way', async () => {
+      found = null;
+      const store = makeStore();
+      await store.refresh([route('a')]);
+      await store.refresh([route('a', up, 'http://a.test/app')]);
+      assert.deepEqual(logged.map(([, line]) => line), [
+        'No icon for a at http://a.test: No response within 10000 ms',
+        'No icon for a at http://a.test/app: No response within 10000 ms',
+      ]);
+    });
+
+    it('gives a reason when the error has no message of its own, as connecting to several addresses does', async () => {
+      found = null;
+      const store = makeStore();
+      failure = Object.assign(new AggregateError([Object.assign(new Error('connect ECONNREFUSED ::1:1'), { code: 'ECONNREFUSED' })], ''), { code: 'ECONNREFUSED' });
+      await store.refresh([route('a')]);
+      failure = Object.assign(new AggregateError([], ''), { code: 'ETIMEDOUT' });
+      await store.refresh([route('b')]);
+      assert.deepEqual(logged.map(([, line]) => line), [
+        'No icon for a at http://a.test: connect ECONNREFUSED ::1:1',
+        'No icon for b at http://b.test: ETIMEDOUT',
+      ]);
+    });
+
+    it('says nothing when a route that has an icon fails briefly and keeps it', async () => {
+      const store = makeStore();
+      await store.refresh([route('a')]);
+      found = null;
+      clock += 24 * HOUR;
+      await store.refresh([route('a')]);
+      found = { type: 'image/png', body: PNG, hash: 'abc' };
+      clock += 24 * HOUR;
+      await store.refresh([route('a')]);
+      assert.deepEqual(logged, []);
+    });
+
+    it('says nothing about a route whose site is not reachable', async () => {
+      found = null;
+      const store = makeStore();
+      await store.refresh([route('down', { reachable: false }), route('error', { reachable: true, statusCode: 502 })]);
+      await store.recheck(route('down', { reachable: false }));
+      assert.deepEqual([lookups, logged], [[], []]);
+    });
+
+    it('says why when a lookup asked for on the page finds nothing', async () => {
+      found = null;
+      const store = makeStore();
+      await store.recheck(route('a'));
+      await store.recheck(route('a'));
+      assert.deepEqual(logged, [['warn', 'No icon for a at http://a.test: No response within 10000 ms']]);
+    });
+
+    it('says why again after the route is forgotten and comes back', async () => {
+      found = null;
+      const store = makeStore();
+      await store.refresh([route('a')]);
+      await store.refresh([]);
+      await store.refresh([route('a')]);
+      assert.equal(logged.length, 2);
+    });
   });
 });
 

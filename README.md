@@ -216,7 +216,11 @@ The homepage is meant to run on a Raspberry Pi without wearing out its SD card. 
 
 Each save writes a temporary file and renames it over the old one, so a power cut can't leave half a file.
 
-Apart from one line at startup, the server only logs when something goes wrong. If Traefik can't be reached, it logs that when it happens and whenever the error changes, not on every poll, then logs one line such as `Reading routes from http://traefik:8080 again` when it answers, so the log shows how long the outage lasted. Docker keeps container logs on disk, so a size limit such as `logging: { driver: local, options: { max-size: 1m } }` in your compose file still helps keep them small.
+Apart from one line at startup, the server only logs when something goes wrong. If Traefik can't be reached, it logs that when it happens and whenever the error changes, not on every poll, then logs one line such as `Reading routes from http://traefik:8080 again` when it answers, so the log shows how long the outage lasted.
+
+When a route's own icon can't be found, the server says why once, for example `No icon for jellyfin@docker at https://jellyfin.example.com: No response within 10000 ms`. It says so again only if the reason or the route's address changes, not on every hourly retry, and logs `Found an icon for jellyfin@docker at https://jellyfin.example.com` if one turns up later. A site that simply has no icon (no icon links and no `/favicon.ico`) is noted once. Routes that are down aren't looked up, so they log nothing, and a route that keeps the icon it already had after a failed re-check doesn't either.
+
+Docker keeps container logs on disk, so a size limit such as `logging: { driver: local, options: { max-size: 1m } }` in your compose file still helps keep them small.
 
 ## API
 
